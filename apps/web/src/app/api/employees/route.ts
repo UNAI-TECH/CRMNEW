@@ -81,10 +81,19 @@ export async function POST(req: NextRequest) {
     };
     const normalizedRole = roleMap[body.role || body.designation] || body.role || 'sales_executive';
 
+    const rawUserId = String(body.userId || body.user_id || body.employeeCode || '').trim();
+    const cleanUserId = rawUserId.toLowerCase().replace(/[^a-z0-9]/g, '') || `staff_${Date.now().toString().slice(-4)}`;
+
+    const rawEmail = String(body.email || '').trim().toLowerCase();
+    const emailRegex = /^(?:[A-Za-z0-9_'+\-]+(?:\.[A-Za-z0-9_'+\-]+)*)@(?:[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}$/;
+    const resolvedEmail = emailRegex.test(rawEmail)
+      ? rawEmail
+      : `${cleanUserId}@dealership.com`;
+
     const validation = EmployeeCreateSchema.safeParse({
       id: body.id,
       fullName: body.fullName || body.full_name || '',
-      email: body.email || '',
+      email: resolvedEmail,
       phone: body.phone,
       role: normalizedRole,
       department: body.department,
@@ -108,24 +117,57 @@ export async function POST(req: NextRequest) {
     const resolved = await getOrCreateTenantAndBranch(tenantId);
     const branchId = body.branchId || body.branch_id || resolved.branchId;
 
-    const empId = body.id || 'emp-' + Date.now();
+    const isValidUuid = (str?: string) =>
+      Boolean(str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str));
+    const empId = isValidUuid(body.id) ? body.id : crypto.randomUUID();
+
     const payloadWithKeys: Record<string, any> = {
       id: empId,
       tenant_id: tenantId,
       branch_id: branchId,
       full_name: body.fullName || body.full_name || 'Staff Member',
-      email: body.email,
-      phone: body.phone || '+91 98000 00000',
+      email: resolvedEmail,
+      phone: body.phone || null,
       role: body.designation || body.role || 'Sales Executive',
       department: body.department || 'Sales',
       is_active: body.status !== 'inactive',
       joined_at: body.joiningDate || body.joined_at || new Date().toISOString().split('T')[0],
+      user_id: rawUserId || null,
+      salary: body.salary || '',
+      salary_category: body.salaryCategory || 'Annual CTC',
+      access_control: body.accessControl || null,
+      is_admin: Boolean(body.isAdmin),
+      is_password_set: Boolean(body.isPasswordSet),
+      avatar_url: body.avatarUrl || body.avatar_url || null,
     };
 
     let { data, error } = await supabaseAdmin
       .from('employees')
       .upsert(payloadWithKeys, { onConflict: 'id' })
       .select();
+
+    // If schema column does not exist yet (pending migration), fallback to standard columns
+    if (error && error.message && error.message.includes('column')) {
+      console.warn('[API/employees] Column warning, retrying with core columns:', error.message);
+      const corePayload = {
+        id: empId,
+        tenant_id: tenantId,
+        branch_id: branchId,
+        full_name: body.fullName || body.full_name || 'Staff Member',
+        email: body.email,
+        phone: body.phone || null,
+        role: body.designation || body.role || 'Sales Executive',
+        department: body.department || 'Sales',
+        is_active: body.status !== 'inactive',
+        joined_at: body.joiningDate || body.joined_at || new Date().toISOString().split('T')[0],
+      };
+      const retryCore = await supabaseAdmin
+        .from('employees')
+        .upsert(corePayload, { onConflict: 'id' })
+        .select();
+      data = retryCore.data;
+      error = retryCore.error;
+    }
 
     if (error && error.message && error.message.includes('foreign key')) {
       console.warn('[API/employees] Foreign key warning, retrying with resolved tenant/branch:', error.message);

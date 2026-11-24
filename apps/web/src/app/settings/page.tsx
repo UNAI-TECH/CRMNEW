@@ -454,8 +454,8 @@ export default function SettingsPage() {
       phone: '',
       designation: 'Sales Executive',
       department: 'Sales',
-      branch: 'Main Showroom',
-      salary: '₹75,000 / mo',
+      branch: '',
+      salary: '',
       password: '',
       avatarUrl: '',
     });
@@ -627,10 +627,11 @@ export default function SettingsPage() {
       const matchDept = employeeDeptFilter === 'All' || e.department === employeeDeptFilter;
       const matchQuery =
         !q ||
-        e.fullName.toLowerCase().includes(q) ||
-        e.employeeCode.toLowerCase().includes(q) ||
-        e.email.toLowerCase().includes(q) ||
-        e.designation.toLowerCase().includes(q);
+        (e.fullName || '').toLowerCase().includes(q) ||
+        (e.userId || '').toLowerCase().includes(q) ||
+        (e.employeeCode || '').toLowerCase().includes(q) ||
+        (e.email || '').toLowerCase().includes(q) ||
+        (e.designation || '').toLowerCase().includes(q);
       return matchDept && matchQuery;
     });
   }, [employees, employeeDeptFilter, employeeSearch]);
@@ -2112,20 +2113,21 @@ export default function SettingsPage() {
             </div>
 
             <div className="form-grid-2">
-              <div className="form-group">
-                <label className="form-label">Dealership Showroom Branch</label>
-                <select
-                  className="form-select"
-                  value={newEmpForm.branch}
-                  onChange={(e) => setNewEmpForm({ ...newEmpForm, branch: e.target.value })}
-                >
-                  <option value="Main Showroom">Main Showroom</option>
-                  {branches.filter((b) => b.name !== 'Main Showroom').map((b) => (
-                    <option key={b.id} value={b.name}>{b.name}</option>
-                  ))}
-                  <option value="All Branches">All Branches</option>
-                </select>
-              </div>
+              {branches.length > 0 && (
+                <div className="form-group">
+                  <label className="form-label">Dealership Showroom Branch</label>
+                  <select
+                    className="form-select"
+                    value={newEmpForm.branch}
+                    onChange={(e) => setNewEmpForm({ ...newEmpForm, branch: e.target.value })}
+                  >
+                    <option value="">Select a Branch (Optional)</option>
+                    {branches.map((b) => (
+                      <option key={b.id} value={b.name}>{b.name} {b.code ? `(${b.code})` : ''}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               <div className="form-group">
                 <label className="form-label">Monthly Salary / Compensation</label>

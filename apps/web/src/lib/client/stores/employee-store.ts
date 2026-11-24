@@ -27,7 +27,8 @@ export interface EmployeeAccessControl {
 
 export interface Employee {
   id: string;
-  employeeCode: string; // e.g. EMP-001 or APEX-EMP-001
+  userId?: string; // Manually assigned by admin e.g. kamal01 or EMP-101
+  employeeCode: string; // Backward compatible alias for userId
   fullName: string;
   email: string;
   phone: string;
@@ -39,9 +40,8 @@ export interface Employee {
   salaryCategory?: string; // e.g. Monthly, Bi-weekly, Hourly, Fixed, etc.
   isAdmin?: boolean; // Admin Privileges toggle
   status: 'active' | 'on_leave' | 'inactive';
-  password: string; // Dealership CRM access password (temporary or permanent)
-  isTemporaryPassword?: boolean; // true if assigned by admin as temporary password
-  mustChangePassword?: boolean; // true if employee must set their own password on first login
+  password: string; // Permanent CRM password once created
+  isPasswordSet?: boolean; // true once employee creates their permanent password
   avatarUrl?: string; // Dealership staff photo / avatar
   leaveBalance: {
     casual: { total: number; used: number };
@@ -51,6 +51,8 @@ export interface Employee {
   leaveHistory: LeaveRecord[];
   accessControl: EmployeeAccessControl;
   tenantId?: string;
+  isTemporaryPassword?: boolean;
+  mustChangePassword?: boolean;
 }
 
 import { supabase, isSupabaseConfigured } from '@/lib/client/supabase';
@@ -63,6 +65,89 @@ function getStorageKey(): string {
 }
 
 export const INITIAL_EMPLOYEES: Employee[] = [];
+
+export function getRoleDefaultAccessControl(
+  role: string = '',
+  department: string = '',
+  isAdmin: boolean = false
+): EmployeeAccessControl {
+  if (isAdmin) {
+    return {
+      pipeline: true,
+      customers: true,
+      inventory: true,
+      procurement: true,
+      deals: true,
+      finance: true,
+      testDrives: true,
+      documents: true,
+      reports: true,
+      settings: true,
+    };
+  }
+
+  const r = (role || '').toLowerCase();
+  const d = (department || '').toLowerCase();
+
+  if (r.includes('account') || r.includes('finance') || d.includes('finance')) {
+    return {
+      pipeline: false,
+      customers: true,
+      inventory: false,
+      procurement: true,
+      deals: true,
+      finance: true,
+      testDrives: false,
+      documents: true,
+      reports: true,
+      settings: false,
+    };
+  }
+
+  if (r.includes('technician') || r.includes('service') || d.includes('service')) {
+    return {
+      pipeline: false,
+      customers: true,
+      inventory: true,
+      procurement: false,
+      deals: false,
+      finance: false,
+      testDrives: false,
+      documents: false,
+      reports: false,
+      settings: false,
+    };
+  }
+
+  if (r.includes('manager') || d.includes('management')) {
+    return {
+      pipeline: true,
+      customers: true,
+      inventory: true,
+      procurement: true,
+      deals: true,
+      finance: false,
+      testDrives: true,
+      documents: true,
+      reports: true,
+      settings: false,
+    };
+  }
+
+  // Default sales executive / telecaller
+  return {
+    pipeline: true,
+    customers: true,
+    inventory: true,
+    procurement: false,
+    deals: true,
+    finance: false,
+    testDrives: true,
+    documents: false,
+    reports: false,
+    settings: false,
+  };
+}
 
 export function getEmployees(): Employee[] {
   if (typeof window === 'undefined') return INITIAL_EMPLOYEES;
@@ -77,7 +162,60 @@ export function getEmployees(): Employee[] {
     }
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) {
-      return parsed;
+      let modified = false;
+      const sanitized = parsed.map((emp) => {
+        if (!emp || typeof emp !== 'object') return emp;
+        const e = { ...emp };
+        // Ensure userId field is populated
+        e.userId = e.userId || e.employeeCode || '';
+        e.employeeCode = e.userId;
+        e.isPasswordSet = Boolean(e.isPasswordSet ?? (e.password && !e.isTemporaryPassword && !e.mustChangePassword));
+
+        // Purge mock phone number
+        if (e.phone === '+91 98000 00000') {
+          e.phone = '';
+          modified = true;
+        }
+        // Purge mock branch names
+        if (
+          e.branch === 'Apex Downtown Flagship' ||
+          e.branch === 'Main Showroom' ||
+          e.branch === 'Service & Body Shop Hub' ||
+          e.branch === 'West Valley Outlet'
+        ) {
+          e.branch = '';
+          modified = true;
+        }
+        // Purge mock leave balances (12 casual, 7 sick, 18 paid) when no leave records exist
+        if (
+          e.leaveBalance &&
+          e.leaveBalance.casual?.total === 12 &&
+          e.leaveBalance.sick?.total === 7 &&
+          e.leaveBalance.paid?.total === 18 &&
+          (!e.leaveHistory || e.leaveHistory.length === 0)
+        ) {
+          e.leaveBalance = {
+            casual: { total: 0, used: 0 },
+            sick: { total: 0, used: 0 },
+            paid: { total: 0, used: 0 },
+          };
+          modified = true;
+        }
+        // Correct access control for Accountant / Finance roles
+        const isFin = (e.designation || '').toLowerCase().includes('account') ||
+                      (e.designation || '').toLowerCase().includes('finance') ||
+                      e.department === 'Finance';
+        if (isFin && e.accessControl && !e.accessControl.finance) {
+          e.accessControl = getRoleDefaultAccessControl(e.designation, e.department, e.isAdmin);
+          modified = true;
+        }
+        return e;
+      });
+
+      if (modified) {
+        localStorage.setItem(key, JSON.stringify(sanitized));
+      }
+      return sanitized;
     }
     return [];
   } catch (err) {
@@ -124,48 +262,56 @@ export async function fetchEmployees(): Promise<Employee[]> {
 
       if (data && Array.isArray(data)) {
         const localList = getEmployees();
-        const localMap = new Map<string, Employee>();
-        localList.forEach((e) => localMap.set(e.id, e));
+        const localMapById = new Map<string, Employee>();
+        const localMapByEmail = new Map<string, Employee>();
+        const localMapByName = new Map<string, Employee>();
+
+        localList.forEach((e) => {
+          if (e.id) localMapById.set(e.id, e);
+          if (e.email) localMapByEmail.set(e.email.toLowerCase().trim(), e);
+          if (e.fullName) localMapByName.set(e.fullName.toLowerCase().trim(), e);
+        });
 
         const remoteList: Employee[] = data.map((row: any) => {
-          const existing = localMap.get(row.id);
+          const rowEmail = (row.email || '').toLowerCase().trim();
+          const rowName = (row.full_name || '').toLowerCase().trim();
+          const existing =
+            localMapById.get(row.id) ||
+            (rowEmail ? localMapByEmail.get(rowEmail) : undefined) ||
+            (rowName ? localMapByName.get(rowName) : undefined);
+
+          const roleName = row.role || existing?.designation || 'Staff Member';
+          const deptName = (row.department as any) || existing?.department || 'Sales';
+          const isAdm = existing?.isAdmin ?? false;
+
+          const resolvedUserId = row.user_id || existing?.userId || existing?.employeeCode || `EMP-${row.id.slice(-3).toUpperCase()}`;
+
           return {
             id: row.id,
             tenantId: row.tenant_id || tenantId,
-            employeeCode: existing?.employeeCode || `EMP-${row.id.slice(-3).toUpperCase()}`,
-            fullName: row.full_name || 'Staff Member',
-            email: row.email || '',
-            phone: row.phone || '+91 98000 00000',
-            designation: row.role || 'Sales Executive',
-            department: (row.department as any) || 'Sales',
-            branch: existing?.branch || 'Apex Downtown Flagship',
-            joiningDate: row.joined_at || new Date().toISOString().split('T')[0],
-            salary: existing?.salary || '₹6,00,000',
-            salaryCategory: existing?.salaryCategory || 'Annual CTC',
-            isAdmin: existing?.isAdmin ?? false,
+            userId: resolvedUserId,
+            employeeCode: resolvedUserId,
+            fullName: row.full_name || existing?.fullName || 'Staff Member',
+            email: row.email || existing?.email || '',
+            phone: row.phone || existing?.phone || '',
+            designation: roleName,
+            department: deptName,
+            branch: existing?.branch || row.branch || '',
+            joiningDate: row.joined_at || existing?.joiningDate || new Date().toISOString().split('T')[0],
+            salary: existing?.salary || row.salary || '',
+            salaryCategory: existing?.salaryCategory || row.salary_category || 'Annual CTC',
+            isAdmin: isAdm,
             status: row.is_active ? 'active' : 'inactive',
-            password: existing?.password || `Temp@${Math.floor(1000 + Math.random() * 9000)}`,
-            isTemporaryPassword: existing?.isTemporaryPassword ?? true,
-            mustChangePassword: existing?.mustChangePassword ?? true,
-            avatarUrl: existing?.avatarUrl || '',
+            password: existing?.password || '',
+            isPasswordSet: Boolean(row.is_password_set ?? existing?.isPasswordSet ?? false),
+            avatarUrl: row.avatar_url || row.avatarUrl || existing?.avatarUrl || '',
             leaveBalance: existing?.leaveBalance || {
-              casual: { total: 12, used: 0 },
-              sick: { total: 7, used: 0 },
-              paid: { total: 18, used: 0 },
+              casual: { total: 0, used: 0 },
+              sick: { total: 0, used: 0 },
+              paid: { total: 0, used: 0 },
             },
             leaveHistory: existing?.leaveHistory || [],
-            accessControl: existing?.accessControl || {
-              pipeline: true,
-              customers: true,
-              inventory: true,
-              procurement: false,
-              deals: true,
-              finance: false,
-              testDrives: true,
-              documents: false,
-              reports: false,
-              settings: false,
-            },
+            accessControl: existing?.accessControl || getRoleDefaultAccessControl(roleName, deptName, isAdm),
           };
         });
 
@@ -227,67 +373,76 @@ export function saveEmployees(employees: Employee[]): void {
   }
 }
 
+export function validateStrongPassword(password: string): { valid: boolean; errors: string[] } {
+  const errors: string[] = [];
+  if (!password || password.length < 8) {
+    errors.push('Password must be at least 8 characters long');
+  }
+  if (!/[A-Z]/.test(password)) {
+    errors.push('Password must contain at least one uppercase letter (A-Z)');
+  }
+  if (!/[a-z]/.test(password)) {
+    errors.push('Password must contain at least one lowercase letter (a-z)');
+  }
+  if (!/[0-9]/.test(password)) {
+    errors.push('Password must contain at least one numeric digit (0-9)');
+  }
+  if (!/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?~`]/.test(password)) {
+    errors.push('Password must contain at least one special character or symbol (!@#$%^&*)');
+  }
+  return { valid: errors.length === 0, errors };
+}
+
 export function addEmployee(employeeData: Partial<Employee>): Employee {
   const current = getEmployees();
-  const count = current.length + 1;
-  const code = employeeData.employeeCode || `EMP-${String(count).padStart(3, '0')}`;
-  const isTemporary = employeeData.isTemporaryPassword !== undefined ? employeeData.isTemporaryPassword : true;
-  const mustChange = employeeData.mustChangePassword !== undefined ? employeeData.mustChangePassword : true;
+  const rawId = (employeeData.userId || employeeData.employeeCode || '').trim();
+  const userId = rawId || `EMP-${Date.now().toString().slice(-4)}`;
   const isAdmin = !!employeeData.isAdmin;
   const tenantId = employeeData.tenantId || getActiveTenantId();
 
-  const defaultAllAccess: EmployeeAccessControl = {
-    pipeline: true,
-    customers: true,
-    inventory: true,
-    procurement: true,
-    deals: true,
-    finance: true,
-    testDrives: true,
-    documents: true,
-    reports: true,
-    settings: true,
-  };
+  // Generate a valid UUID so Supabase and client agree on the same ID
+  const uuid = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+    ? crypto.randomUUID()
+    : 'emp-' + Date.now();
+  const empId = (employeeData.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(employeeData.id))
+    ? employeeData.id
+    : uuid;
 
-  const defaultStaffAccess: EmployeeAccessControl = {
-    pipeline: true,
-    customers: true,
-    inventory: true,
-    procurement: false,
-    deals: true,
-    finance: false,
-    testDrives: true,
-    documents: false,
-    reports: false,
-    settings: false,
-  };
+  const resolvedRole = employeeData.designation || 'Sales Executive';
+  const resolvedDept = employeeData.department || (isAdmin ? 'Admin' : 'Sales');
+
+  const rawEmail = (employeeData.email || '').trim().toLowerCase();
+  const emailRegex = /^(?:[A-Za-z0-9_'+\-]+(?:\.[A-Za-z0-9_'+\-]+)*)@(?:[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}$/;
+  const validEmail = emailRegex.test(rawEmail)
+    ? rawEmail
+    : `${userId.toLowerCase().replace(/[^a-z0-9]/g, '')}@dealership.com`;
 
   const newEmp: Employee = {
-    id: employeeData.id || 'emp-' + Date.now(),
+    id: empId,
     tenantId: tenantId,
-    employeeCode: code,
+    userId: userId,
+    employeeCode: userId, // Backward compatibility alias
     fullName: employeeData.fullName || 'New Employee',
-    email: employeeData.email || `employee.${Date.now()}@dealership.com`,
-    phone: employeeData.phone || '+91 98000 00000',
-    designation: employeeData.designation || 'Sales Executive',
-    department: employeeData.department || (isAdmin ? 'Admin' : 'Sales'),
-    branch: employeeData.branch || 'Main Showroom',
+    email: validEmail,
+    phone: employeeData.phone || '',
+    designation: resolvedRole,
+    department: resolvedDept,
+    branch: employeeData.branch || '',
     joiningDate: employeeData.joiningDate || new Date().toISOString().split('T')[0],
     salary: employeeData.salary || '',
     salaryCategory: employeeData.salaryCategory || 'Annual CTC',
     isAdmin: isAdmin,
     status: employeeData.status || 'active',
-    password: employeeData.password || `Temp@${Math.floor(1000 + Math.random() * 9000)}`,
-    isTemporaryPassword: isTemporary,
-    mustChangePassword: mustChange,
+    password: employeeData.password || '',
+    isPasswordSet: false, // Staff creates their permanent password on 1st login
     avatarUrl: employeeData.avatarUrl || '',
-    leaveBalance: {
-      casual: { total: 12, used: 0 },
-      sick: { total: 7, used: 0 },
-      paid: { total: 18, used: 0 },
+    leaveBalance: employeeData.leaveBalance || {
+      casual: { total: 0, used: 0 },
+      sick: { total: 0, used: 0 },
+      paid: { total: 0, used: 0 },
     },
-    leaveHistory: [],
-    accessControl: isAdmin ? defaultAllAccess : (employeeData.accessControl || defaultStaffAccess),
+    leaveHistory: employeeData.leaveHistory || [],
+    accessControl: employeeData.accessControl || getRoleDefaultAccessControl(resolvedRole, resolvedDept, isAdmin),
   };
 
   const updated = [newEmp, ...current];
@@ -301,6 +456,8 @@ export function addEmployee(employeeData: Partial<Employee>): Employee {
       body: JSON.stringify({
         id: newEmp.id,
         tenantId: newEmp.tenantId,
+        userId: newEmp.userId,
+        employeeCode: newEmp.userId,
         fullName: newEmp.fullName,
         email: newEmp.email,
         phone: newEmp.phone,
@@ -308,31 +465,27 @@ export function addEmployee(employeeData: Partial<Employee>): Employee {
         department: newEmp.department,
         status: newEmp.status,
         joiningDate: newEmp.joiningDate,
+        salary: newEmp.salary,
+        salaryCategory: newEmp.salaryCategory,
+        isAdmin: newEmp.isAdmin,
+        isPasswordSet: false,
+        avatarUrl: newEmp.avatarUrl,
       }),
     })
       .then(async (res) => {
         if (!res.ok) {
           const errData = await res.json().catch(() => ({}));
           console.error('[EmployeeStore] API addEmployee error:', errData);
-          if (isSupabaseConfigured()) {
-            supabase
-              .from('employees')
-              .upsert(
-                {
-                  id: newEmp.id,
-                  full_name: newEmp.fullName,
-                  email: newEmp.email,
-                  phone: newEmp.phone,
-                  role: newEmp.designation,
-                  department: newEmp.department,
-                  is_active: newEmp.status === 'active',
-                  joined_at: newEmp.joiningDate,
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(
+              new CustomEvent('crm-error-popup', {
+                detail: {
+                  title: 'Database Synchronization Failed',
+                  message: errData.error || errData.message || 'Failed to save employee to Supabase database.',
+                  details: JSON.stringify(errData, null, 2),
                 },
-                { onConflict: 'id' }
-              )
-              .then(({ error }) => {
-                if (error) console.error('[EmployeeStore] Supabase direct fallback error:', error.message);
-              });
+              })
+            );
           }
         } else {
           console.log('[EmployeeStore] Successfully saved employee to Supabase backend table:', newEmp.fullName);
@@ -340,25 +493,16 @@ export function addEmployee(employeeData: Partial<Employee>): Employee {
       })
       .catch((err) => {
         console.error('[EmployeeStore] Failed to post employee to /api/employees:', err);
-      });
-  } else if (isSupabaseConfigured()) {
-    supabase
-      .from('employees')
-      .upsert(
-        {
-          id: newEmp.id,
-          full_name: newEmp.fullName,
-          email: newEmp.email,
-          phone: newEmp.phone,
-          role: newEmp.designation,
-          department: newEmp.department,
-          is_active: newEmp.status === 'active',
-          joined_at: newEmp.joiningDate,
-        },
-        { onConflict: 'id' }
-      )
-      .then(({ error }) => {
-        if (error) console.error('[EmployeeStore] Supabase SSR fallback error:', error.message);
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(
+            new CustomEvent('crm-error-popup', {
+              detail: {
+                title: 'Network / Connection Error',
+                message: err?.message || 'Could not reach server to save employee.',
+              },
+            })
+          );
+        }
       });
   }
 
@@ -374,7 +518,33 @@ export function updateEmployee(id: string, updates: Partial<Employee>): Employee
   current[idx] = updatedEmp;
   saveEmployees(current);
 
-  // Sync update to Supabase
+  // Sync update to Supabase via /api/employees (uses service role admin)
+  if (typeof window !== 'undefined') {
+    fetch('/api/employees', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: updatedEmp.id,
+        tenantId: updatedEmp.tenantId,
+        userId: updatedEmp.userId,
+        employeeCode: updatedEmp.userId,
+        fullName: updatedEmp.fullName,
+        email: updatedEmp.email,
+        phone: updatedEmp.phone,
+        designation: updatedEmp.designation,
+        department: updatedEmp.department,
+        status: updatedEmp.status,
+        joiningDate: updatedEmp.joiningDate,
+        salary: updatedEmp.salary,
+        salaryCategory: updatedEmp.salaryCategory,
+        isAdmin: updatedEmp.isAdmin,
+        isPasswordSet: updatedEmp.isPasswordSet,
+        avatarUrl: updatedEmp.avatarUrl,
+      }),
+    }).catch((err) => console.warn('[EmployeeStore] updateEmployee API sync warning:', err));
+  }
+
+  // Sync update to Supabase direct client fallback
   if (isSupabaseConfigured()) {
     const payload: Record<string, any> = {};
     if (updates.fullName !== undefined) payload.full_name = updates.fullName;
@@ -384,6 +554,8 @@ export function updateEmployee(id: string, updates: Partial<Employee>): Employee
     if (updates.department !== undefined) payload.department = updates.department;
     if (updates.status !== undefined) payload.is_active = updates.status === 'active';
     if (updates.joiningDate !== undefined) payload.joined_at = updates.joiningDate;
+    if (updates.userId !== undefined) payload.user_id = updates.userId;
+    if (updates.avatarUrl !== undefined) payload.avatar_url = updates.avatarUrl;
 
     if (Object.keys(payload).length > 0) {
       supabase
@@ -405,71 +577,258 @@ export function updateEmployeePassword(id: string, newPassword: string): boolean
   const emp = current.find((e) => e.id === id);
   if (!emp) return false;
   emp.password = newPassword;
+  emp.isPasswordSet = true;
   saveEmployees(current);
   return true;
 }
 
-export function setEmployeePermanentPassword(id: string, newPassword: string): boolean {
+export async function setEmployeePermanentPassword(
+  idOrUserId: string,
+  newPassword: string
+): Promise<{ success: boolean; error?: string }> {
+  const validation = validateStrongPassword(newPassword);
+  if (!validation.valid) {
+    return { success: false, error: validation.errors[0] };
+  }
+
   const current = getEmployees();
-  const emp = current.find((e) => e.id === id);
-  if (!emp) return false;
-  emp.password = newPassword;
-  emp.mustChangePassword = false;
-  emp.isTemporaryPassword = false;
-  saveEmployees(current);
-  return true;
+  const emp = current.find((e) => e.id === idOrUserId || (e.userId && e.userId.toLowerCase() === idOrUserId.toLowerCase()));
+
+  if (emp) {
+    emp.password = newPassword;
+    emp.isPasswordSet = true;
+    emp.mustChangePassword = false;
+    emp.isTemporaryPassword = false;
+    saveEmployees(current);
+  }
+
+  // Sync to database via /api/employees/auth
+  if (typeof window !== 'undefined') {
+    try {
+      const res = await fetch('/api/employees/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'set-password',
+          userId: emp?.userId || idOrUserId,
+          password: newPassword,
+        }),
+      });
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({}));
+        if (json.error) return { success: false, error: json.error };
+      }
+    } catch (err) {
+      console.warn('[EmployeeStore] Failed to sync password to Supabase:', err);
+    }
+  }
+
+  return { success: true };
 }
 
-export function resetEmployeeTemporaryPassword(id: string, tempPassword?: string): { success: boolean; newTempPassword?: string } {
+export async function resetEmployeePassword(id: string): Promise<{ success: boolean; error?: string }> {
   const current = getEmployees();
   const emp = current.find((e) => e.id === id);
-  if (!emp) return { success: false };
-  const generated = tempPassword?.trim() || `Temp@${Math.floor(1000 + Math.random() * 9000)}`;
-  emp.password = generated;
-  emp.mustChangePassword = true;
-  emp.isTemporaryPassword = true;
+  if (!emp) return { success: false, error: 'Employee not found in registry.' };
+  emp.password = '';
+  emp.isPasswordSet = false;
   saveEmployees(current);
-  return { success: true, newTempPassword: generated };
+
+  // Sync to database
+  if (typeof window !== 'undefined') {
+    try {
+      const res = await fetch('/api/employees/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'reset-password',
+          userId: emp.userId || emp.id,
+        }),
+      });
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({}));
+        return { success: false, error: json.error || 'Failed to reset password in database.' };
+      }
+    } catch (err: any) {
+      console.warn('[EmployeeStore] Failed to sync reset to Supabase:', err);
+      return { success: false, error: err?.message || 'Database connection error during reset.' };
+    }
+  }
+
+  return { success: true };
 }
 
-export function verifyEmployeeLogin(
+export async function verifyEmployeeUserId(
   idOrEmail: string,
-  pass: string
-): { success: boolean; employee?: Employee; requiresPasswordChange?: boolean; error?: string } {
-  const all = getEmployees();
+  tenantId?: string
+): Promise<{
+  success: boolean;
+  employee?: Employee;
+  isPasswordSet?: boolean;
+  company?: { name: string; dealershipName?: string; logoUrl?: string | null; tenantId?: string };
+  multipleTenants?: boolean;
+  options?: any[];
+  error?: string;
+}> {
   const q = idOrEmail.trim().toLowerCase();
+  if (!q) return { success: false, error: 'Please enter your User ID.' };
+
+  // 1. Try remote database verification via /api/employees/auth
+  if (typeof window !== 'undefined') {
+    try {
+      const res = await fetch('/api/employees/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'verify-id', userId: q, tenantId }),
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.multipleTenants && json.options) {
+          return {
+            success: true,
+            multipleTenants: true,
+            options: json.options,
+          };
+        }
+
+        if (json.success && json.employee) {
+          const localList = getEmployees();
+          const match = localList.find(
+            (e) => e.id === json.employee.id || (e.userId && e.userId.toLowerCase() === q) || e.email.toLowerCase() === q
+          );
+          if (match) {
+            match.isPasswordSet = json.employee.isPasswordSet;
+            if (json.employee.tenantId) match.tenantId = json.employee.tenantId;
+            saveEmployees(localList);
+            return {
+              success: true,
+              employee: match,
+              isPasswordSet: match.isPasswordSet,
+              company: json.company,
+            };
+          }
+
+          const freshEmp: Employee = {
+            id: json.employee.id,
+            tenantId: json.employee.tenantId,
+            userId: json.employee.userId,
+            employeeCode: json.employee.userId,
+            fullName: json.employee.fullName,
+            email: json.employee.email,
+            phone: '',
+            designation: json.employee.role || 'Staff Member',
+            department: json.employee.department || 'Sales',
+            branch: '',
+            joiningDate: new Date().toISOString().split('T')[0],
+            salary: '',
+            salaryCategory: 'Annual CTC',
+            isAdmin: json.employee.role === 'tenant_admin',
+            status: json.employee.isActive ? 'active' : 'inactive',
+            password: '',
+            isPasswordSet: json.employee.isPasswordSet,
+            leaveBalance: { casual: { total: 0, used: 0 }, sick: { total: 0, used: 0 }, paid: { total: 0, used: 0 } },
+            leaveHistory: [],
+            accessControl: getRoleDefaultAccessControl(json.employee.role, json.employee.department, false),
+          };
+          saveEmployees([freshEmp, ...localList]);
+          return {
+            success: true,
+            employee: freshEmp,
+            isPasswordSet: freshEmp.isPasswordSet,
+            company: json.company,
+          };
+        }
+      } else {
+        const errJson = await res.json().catch(() => ({}));
+        if (errJson.error) {
+          return { success: false, error: errJson.error };
+        }
+      }
+    } catch (err) {
+      console.warn('[EmployeeStore] Remote verify error, trying local cache:', err);
+    }
+  }
+
+  // 2. Client-side local verification fallback
+  const all = getEmployees();
   const emp = all.find(
     (e) =>
-      e.employeeCode.toLowerCase() === q ||
-      e.email.toLowerCase() === q ||
-      (e.phone && e.phone.replace(/[^0-9]/g, '').endsWith(q.replace(/[^0-9]/g, '')))
+      (e.userId && e.userId.toLowerCase() === q) ||
+      (e.employeeCode && e.employeeCode.toLowerCase() === q) ||
+      (e.email && e.email.toLowerCase() === q)
   );
 
   if (!emp) {
-    return { success: false, error: 'No employee record found matching this Employee ID or Email.' };
+    return { success: false, error: `User ID '${idOrEmail}' was not found in the dealership database.` };
   }
 
   if (emp.status === 'inactive') {
     return { success: false, error: 'This employee account is inactive. Please contact your administrator.' };
   }
 
-  if (emp.password !== pass) {
-    return {
-      success: false,
-      error: 'Invalid password. If this is your first time logging in, please enter the temporary password provided by your administrator.',
-    };
-  }
+  return { success: true, employee: emp, isPasswordSet: Boolean(emp.isPasswordSet) };
+}
 
-  if (typeof window !== 'undefined' && emp.tenantId) {
+export async function verifyEmployeeLogin(
+  idOrEmail: string,
+  pass: string
+): Promise<{ success: boolean; employee?: Employee; requiresPasswordCreation?: boolean; error?: string }> {
+  const q = idOrEmail.trim().toLowerCase();
+
+  // Try remote database authentication first
+  if (typeof window !== 'undefined') {
     try {
-      localStorage.setItem(`crm_emp_tenant_${emp.id}`, emp.tenantId);
-    } catch {}
+      const res = await fetch('/api/employees/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'login', userId: q, password: pass }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (res.ok && json.success) {
+        const localList = getEmployees();
+        const match = localList.find(
+          (e) => e.id === json.employee?.id || (e.userId && e.userId.toLowerCase() === q) || e.email.toLowerCase() === q
+        );
+        const resolved = match || json.employee;
+        return { success: true, employee: resolved };
+      }
+      if (json.requiresPasswordCreation) {
+        return { success: false, requiresPasswordCreation: true, error: json.error };
+      }
+      if (!res.ok && json.error) {
+        return { success: false, error: json.error };
+      }
+    } catch (err) {
+      console.warn('[EmployeeStore] Remote login error, checking local store:', err);
+    }
   }
 
-  const requiresPasswordChange = emp.mustChangePassword === true || emp.isTemporaryPassword === true;
-  // Omit plaintext password before returning employee to client-side state
-  const { password: _, ...safeEmployee } = emp;
-  return { success: true, employee: safeEmployee as Employee, requiresPasswordChange };
+  // Client-side fallback
+  const all = getEmployees();
+  const emp = all.find(
+    (e) =>
+      (e.userId && e.userId.toLowerCase() === q) ||
+      (e.employeeCode && e.employeeCode.toLowerCase() === q) ||
+      (e.email && e.email.toLowerCase() === q)
+  );
+
+  if (!emp) {
+    return { success: false, error: 'No employee record found matching this User ID.' };
+  }
+
+  if (emp.status === 'inactive') {
+    return { success: false, error: 'This employee account is inactive. Please contact your administrator.' };
+  }
+
+  if (!emp.isPasswordSet) {
+    return { success: false, requiresPasswordCreation: true, error: 'Please create your permanent password.' };
+  }
+
+  if (emp.password !== pass) {
+    return { success: false, error: 'Incorrect permanent password. Please verify and try again.' };
+  }
+
+  return { success: true, employee: emp };
 }
 
 export function updateEmployeeAccessControl(id: string, access: EmployeeAccessControl): boolean {

@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isServerSupabaseConfigured, supabaseAdmin, createServerClient } from '@/lib/server/supabase';
+import { verifySignedSession } from '@/lib/shared/session-signature';
+import { deriveTenantIdFromEmail } from '@/lib/shared/tenant-slug';
 import { UserRole } from '@crm/shared-types';
 
 export const VALID_ROLES: UserRole[] = [
@@ -54,6 +56,27 @@ export function extractToken(req: NextRequest | Request): string | null {
   const rawCookie = req.headers.get('cookie');
   if (rawCookie) {
     const match = rawCookie.match(/(?:^|;\s*)(?:sb-access-token|crm-token|crm_access_token)=([^;]+)/);
+    if (match && match[1]) {
+      return decodeURIComponent(match[1]);
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Extracts the HMAC-signed crm-session cookie from an incoming Next.js request.
+ */
+export function extractSessionCookie(req: NextRequest | Request): string | null {
+  if ('cookies' in req && req.cookies && typeof req.cookies.get === 'function') {
+    const nextReq = req as NextRequest;
+    const cookie = nextReq.cookies.get('crm-session')?.value;
+    if (cookie) return cookie;
+  }
+
+  const rawCookie = req.headers.get('cookie');
+  if (rawCookie) {
+    const match = rawCookie.match(/(?:^|;\s*)crm-session=([^;]+)/);
     if (match && match[1]) {
       return decodeURIComponent(match[1]);
     }
@@ -239,103 +262,132 @@ export async function verifySession(req: NextRequest | Request): Promise<AuthRes
   }
 
   const token = extractToken(req);
-  if (!token) {
-    return {
-      success: false,
-      error: 'Authentication required. No session token provided.',
-      status: 401,
-    };
+
+  // 1. If Supabase bearer / cookie token is present, attempt live verification
+  if (token) {
+    try {
+      const serverClient = createServerClient(token);
+      const { data: authData, error: authErr } = await serverClient.auth.getUser(token);
+      if (!authErr && authData?.user && authData.user.email) {
+        const authUser = authData.user;
+        const userEmail = (authUser.email || '').toLowerCase().trim();
+        if (!userEmail) {
+          return {
+            success: false,
+            error: 'Authenticated user has no valid email address.',
+            status: 401,
+          };
+        }
+
+        // Verify account is active in app_users
+        const { data: appUsers } = await supabaseAdmin
+          .from('app_users')
+          .select('id, email, full_name, is_active')
+          .or(`id.eq.${authUser.id},email.eq.${userEmail}`);
+
+        const appUser = appUsers && appUsers.length > 0 ? appUsers[0] : null;
+        if (appUser && appUser.is_active === false) {
+          return {
+            success: false,
+            error: 'Account is disabled. Please contact your dealership administrator.',
+            status: 403,
+          };
+        }
+
+        // Look up active membership in memberships / employees / onboarded dealership admin tables
+        const resolved = await resolveTrustedTenantRole(authUser.id, userEmail, appUser, authUser.user_metadata);
+        const resolvedTenantId = resolved.tenantId;
+        const resolvedRoleKey = resolved.roleKey;
+        const branchIds = resolved.branchIds;
+        const activeMembershipId = resolved.membershipId;
+
+        // Enforce Tenant Membership & Role requirement
+        if (resolvedTenantId && resolvedRoleKey && VALID_ROLES.includes(resolvedRoleKey as UserRole)) {
+          return {
+            success: true,
+            session: {
+              user: {
+                id: authUser.id,
+                email: userEmail,
+                fullName:
+                  appUser?.full_name ||
+                  authUser.user_metadata?.full_name ||
+                  authUser.user_metadata?.name ||
+                  userEmail.split('@')[0],
+              },
+              tenantId: resolvedTenantId,
+              role: resolvedRoleKey as UserRole,
+              branchIds,
+              membershipId: activeMembershipId,
+            },
+          };
+        }
+      }
+    } catch (tokenErr) {
+      console.warn('[ServerAuth] Supabase token check note:', tokenErr);
+    }
   }
 
-  try {
-    // 1. Verify caller identity with Supabase createServerClient using request session token
-    const serverClient = createServerClient(token);
-    const { data: authData, error: authErr } = await serverClient.auth.getUser(token);
-    if (authErr || !authData || !authData.user) {
-      return {
-        success: false,
-        error: 'Invalid or expired session. Please log in again.',
-        status: 401,
-      };
+  // 2. Cryptographic Fallback: Verify HMAC-signed crm-session cookie (7-day validity)
+  const sessionCookie = extractSessionCookie(req);
+  if (sessionCookie) {
+    try {
+      const verifiedPayload = await verifySignedSession(sessionCookie);
+      if (verifiedPayload && verifiedPayload.userId) {
+        const { data: appUsers } = await supabaseAdmin
+          .from('app_users')
+          .select('id, email, full_name, is_active')
+          .eq('id', verifiedPayload.userId);
+
+        let appUser = appUsers && appUsers.length > 0 ? appUsers[0] : null;
+        let email = appUser?.email;
+        let fullName = appUser?.full_name;
+
+        if (!appUser) {
+          try {
+            const { data: authData } = await supabaseAdmin.auth.admin.getUserById(verifiedPayload.userId);
+            if (authData?.user) {
+              email = authData.user.email?.toLowerCase().trim();
+              fullName = authData.user.user_metadata?.full_name || email?.split('@')[0] || 'Administrator';
+            }
+          } catch {}
+        }
+
+        if (appUser && appUser.is_active === false) {
+          return {
+            success: false,
+            error: 'Account is disabled. Please contact your dealership administrator.',
+            status: 403,
+          };
+        }
+
+        const resolvedTenantId = verifiedPayload.tenantId || (email ? deriveTenantIdFromEmail(email) : 't_default');
+        const resolvedRoleKey = (verifiedPayload.role || 'tenant_admin') as UserRole;
+
+        return {
+          success: true,
+          session: {
+            user: {
+              id: verifiedPayload.userId,
+              email: email || '',
+              fullName: fullName || 'Dealership User',
+            },
+            tenantId: resolvedTenantId,
+            role: resolvedRoleKey,
+            branchIds: [],
+          },
+        };
+      }
+    } catch (cookieErr) {
+      console.warn('[ServerAuth] crm-session fallback note:', cookieErr);
     }
-
-    const authUser = authData.user;
-    const userEmail = authUser.email?.toLowerCase().trim();
-    if (!userEmail) {
-      return {
-        success: false,
-        error: 'Authenticated user has no valid email address.',
-        status: 401,
-      };
-    }
-
-    // 2. Verify account is active in app_users
-    const { data: appUsers, error: appUserErr } = await supabaseAdmin
-      .from('app_users')
-      .select('id, email, full_name, is_active')
-      .or(`id.eq.${authUser.id},email.eq.${userEmail}`);
-
-    const appUser = appUsers && appUsers.length > 0 ? appUsers[0] : null;
-    if (appUser && appUser.is_active === false) {
-      return {
-        success: false,
-        error: 'Account is disabled. Please contact your dealership administrator.',
-        status: 403,
-      };
-    }
-
-    // 3. Look up active membership in memberships / employees / onboarded dealership admin tables
-    const resolved = await resolveTrustedTenantRole(authUser.id, userEmail, appUser, authUser.user_metadata);
-    const resolvedTenantId = resolved.tenantId;
-    const resolvedRoleKey = resolved.roleKey;
-    const branchIds = resolved.branchIds;
-    const activeMembershipId = resolved.membershipId;
-
-    // 5. Enforce Tenant Membership requirement
-    if (!resolvedTenantId) {
-      return {
-        success: false,
-        error: 'Account has no active dealership membership. Contact your administrator.',
-        status: 403,
-      };
-    }
-
-    // 6. Enforce Role validity requirement
-    if (!resolvedRoleKey || !VALID_ROLES.includes(resolvedRoleKey as UserRole)) {
-      return {
-        success: false,
-        error: 'User has an invalid or unauthorized role assignment.',
-        status: 403,
-      };
-    }
-
-    // Return verified session data
-    return {
-      success: true,
-      session: {
-        user: {
-          id: authUser.id,
-          email: userEmail,
-          fullName:
-            appUser?.full_name ||
-            authUser.user_metadata?.full_name ||
-            authUser.user_metadata?.name ||
-            userEmail.split('@')[0],
-        },
-        tenantId: resolvedTenantId,
-        role: resolvedRoleKey as UserRole,
-        branchIds,
-        membershipId: activeMembershipId,
-      },
-    };
-  } catch (err: any) {
-    console.error('[ServerAuth] Unexpected verification error:', err);
-    return {
-      success: false,
-      error: 'Authentication failed due to internal server error.',
-      status: 500,
-    };
   }
+
+  return {
+    success: false,
+    error: 'Authentication required. No valid session token provided.',
+    status: 401,
+  };
 }
 
 /**

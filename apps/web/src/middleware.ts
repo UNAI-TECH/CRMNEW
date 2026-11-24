@@ -44,9 +44,12 @@ export async function middleware(req: NextRequest) {
   }
 
   const hasValidToken = Boolean(token && isTokenValid(token));
+  const sessionCookie = req.cookies.get('crm-session')?.value;
+  const verified = sessionCookie ? await verifySignedSession(sessionCookie) : null;
+  const isAuthenticated = Boolean(hasValidToken || verified);
 
   if (pathname.startsWith('/api/')) {
-    if (!hasValidToken) {
+    if (!isAuthenticated) {
       return NextResponse.json(
         { error: 'Unauthorized: Authentication required. Please provide a valid session token.', code: 'UNAUTHORIZED' },
         { status: 401 }
@@ -56,31 +59,26 @@ export async function middleware(req: NextRequest) {
   }
 
   if (isProtectedPagePath(pathname)) {
-    if (!hasValidToken) {
-      const loginUrl = new URL('/login', req.url);
+    if (!isAuthenticated) {
+      const targetLogin = pathname.startsWith('/empportal') ? '/emplogin' : '/login';
+      const loginUrl = new URL(targetLogin, req.url);
       loginUrl.searchParams.set('redirect', pathname);
       return NextResponse.redirect(loginUrl);
     }
 
-    const sessionCookie = req.cookies.get('crm-session')?.value;
-    const verified = sessionCookie ? await verifySignedSession(sessionCookie) : null;
-
-    if (!verified) {
-      const loginUrl = new URL('/login', req.url);
-      loginUrl.searchParams.set('redirect', pathname);
-      return NextResponse.redirect(loginUrl);
-    }
+    const role = verified?.role || req.cookies.get('crm-role')?.value || 'tenant_admin';
+    const isOnboarded = verified ? verified.isOnboarded === true : req.cookies.get('crm-onboarded')?.value === 'true';
 
     // Enforce mandatory onboarding before accessing dashboard or CRM workspace
-    if (verified.role === 'tenant_admin' && verified.isOnboarded !== true) {
+    if (role === 'tenant_admin' && !isOnboarded) {
       return NextResponse.redirect(new URL('/onboarding', req.url));
     }
 
-    if (pathname.startsWith('/finance') && !(FINANCE_ALLOWED_ROLES as readonly string[]).includes(verified.role)) {
+    if (pathname.startsWith('/finance') && !(FINANCE_ALLOWED_ROLES as readonly string[]).includes(role)) {
       return NextResponse.redirect(new URL('/empportal', req.url));
     }
 
-    if (pathname.startsWith('/employees') && !(ADMIN_ALLOWED_ROLES as readonly string[]).includes(verified.role)) {
+    if (pathname.startsWith('/employees') && !(ADMIN_ALLOWED_ROLES as readonly string[]).includes(role)) {
       return NextResponse.redirect(new URL('/empportal', req.url));
     }
   }

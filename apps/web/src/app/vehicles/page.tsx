@@ -477,38 +477,7 @@ export default function VehiclesPage() {
       </div>
 
       {/* Table-Wise Row Cards List */}
-      {!isMounted ? (
-        <div
-          style={{
-            padding: '4rem 1rem',
-            textAlign: 'center',
-            backgroundColor: '#FFFFFF',
-            borderRadius: '16px',
-            border: '1px solid rgba(0, 0, 0, 0.06)',
-            boxShadow: '0 4px 20px rgba(0, 0, 0, 0.04)',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '12px',
-          }}
-          suppressHydrationWarning
-        >
-          <div
-            style={{
-              width: '32px',
-              height: '32px',
-              border: '3px solid #EDE9FE',
-              borderTop: '3px solid #6253F8',
-              borderRadius: '50%',
-              animation: 'spin 0.8s linear infinite',
-            }}
-          />
-          <span style={{ fontSize: '0.88rem', color: '#64748B', fontWeight: 500 }}>
-            Loading dealership stock & inventory...
-          </span>
-        </div>
-      ) : filteredVehicles.length > 0 ? (
+      {filteredVehicles.length > 0 ? (
         <div>
           <div
             className="app-table-header"

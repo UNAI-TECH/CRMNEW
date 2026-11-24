@@ -1,18 +1,43 @@
 import type { Metadata } from 'next';
+import { cookies } from 'next/headers';
 import '@/styles/globals.css';
 import { AuthProvider } from '@/lib/client/auth-context';
 import { Shell } from '@/components/layout/Shell';
 
 export const metadata: Metadata = {
-  title: 'UNAI CRM — Enterprise Dealership CRM & Management Platform',
+  title: {
+    default: 'Dealership Staff Portal',
+    template: '%s | Dealership CRM',
+  },
   description: 'Complete multi-tenant car dealership CRM, vehicle inventory, sales desk, finance, delivery, and after-sales platform.',
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const cookieStore = await cookies();
+  const rawSession = typeof cookieStore?.get === 'function' ? cookieStore.get('crm-employee-session')?.value : undefined;
+  const rawDealershipName = typeof cookieStore?.get === 'function' ? cookieStore.get('crm-dealership-name')?.value : undefined;
+
+  let initialSession = null;
+  if (rawSession) {
+    try {
+      initialSession = JSON.parse(decodeURIComponent(rawSession));
+    } catch (e) {
+      initialSession = null;
+    }
+  }
+
+  let initialDealershipName = '';
+  if (rawDealershipName) {
+    try {
+      initialDealershipName = decodeURIComponent(rawDealershipName);
+    } catch (e) {
+      initialDealershipName = '';
+    }
+  }
   return (
     <html lang="en">
       <head>
@@ -326,10 +351,68 @@ export default function RootLayout({
             `,
           }}
         />
+
+        {/* Synchronous Session & Branding Cookie Injector (Eliminates SSR hydration flash) */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              (function() {
+                try {
+                  var s = localStorage.getItem('crm_active_user_session_v1');
+                  if (s && !document.cookie.includes('crm-employee-session=')) {
+                    var sess = JSON.parse(s);
+                    var cookieData = {
+                      id: sess.employeeId || sess.userId,
+                      userId: sess.employeeCode || sess.userId,
+                      employeeCode: sess.employeeCode || sess.userId,
+                      fullName: sess.fullName,
+                      email: sess.email,
+                      role: sess.role,
+                      department: 'Sales',
+                      designation: sess.role === 'sales_executive' ? 'Sales Executive' : 'Staff Member',
+                      branch: 'Main Showroom',
+                      accessControl: sess.accessControl,
+                      avatarUrl: sess.avatarUrl,
+                      phone: sess.phone
+                    };
+                    document.cookie = 'crm-employee-session=' + encodeURIComponent(JSON.stringify(cookieData)) + '; path=/; max-age=604800; SameSite=Lax';
+                  }
+                  var c = localStorage.getItem('crm_dealership_company_profile_v1');
+                  if (c) {
+                    var cp = JSON.parse(c);
+                    var name = cp.tradeName || cp.legalName || '';
+                    if (name) {
+                      if (!document.cookie.includes('crm-dealership-name=')) {
+                        document.cookie = 'crm-dealership-name=' + encodeURIComponent(name) + '; path=/; max-age=604800; SameSite=Lax';
+                      }
+                      document.addEventListener('DOMContentLoaded', function() {
+                        var titleEl = document.getElementById('top-bar-brand-title');
+                        if (titleEl && (!titleEl.textContent || !titleEl.textContent.trim())) {
+                          titleEl.textContent = name;
+                          titleEl.style.display = '';
+                        }
+                        var badgeEl = document.getElementById('top-bar-brand-badge');
+                        if (badgeEl && (!badgeEl.textContent || !badgeEl.textContent.trim())) {
+                          badgeEl.textContent = name.charAt(0).toUpperCase();
+                          badgeEl.style.display = '';
+                        }
+                      });
+                    }
+                  }
+                } catch(e) {}
+              })();
+            `,
+          }}
+        />
       </head>
       <body>
         <AuthProvider>
-          <Shell>{children}</Shell>
+          <Shell
+            initialSession={initialSession}
+            initialDealershipName={initialDealershipName}
+          >
+            {children}
+          </Shell>
         </AuthProvider>
       </body>
     </html>

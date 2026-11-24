@@ -287,7 +287,15 @@ export async function fetchCompanyProfile(): Promise<CompanyProfile> {
 
   try {
     const tenantId = getActiveTenantId();
-    const res = await fetch(`/api/company-profile?tenantId=${encodeURIComponent(tenantId)}`);
+    const { data: authData } = await supabase.auth.getSession().catch(() => ({ data: { session: null } }));
+    const headers: Record<string, string> = {};
+    if (authData?.session?.access_token) {
+      headers.Authorization = `Bearer ${authData.session.access_token}`;
+    }
+
+    const res = await fetch(`/api/company-profile?tenantId=${encodeURIComponent(tenantId)}`, {
+      headers: Object.keys(headers).length > 0 ? headers : undefined,
+    });
     if (res.ok) {
       const json = await res.json();
       if (Array.isArray(json?.modules) && json.modules.length > 0) {
@@ -339,6 +347,13 @@ export function saveCompanyProfile(
     const key = getStorageKey();
     localStorage.setItem(key, JSON.stringify(updated));
     window.dispatchEvent(new CustomEvent('crm-company-profile-changed', { detail: updated }));
+
+    if (typeof document !== 'undefined') {
+      const brandName = updated.tradeName || updated.legalName || '';
+      if (brandName) {
+        document.cookie = `crm-dealership-name=${encodeURIComponent(brandName)}; path=/; max-age=604800; SameSite=Lax`;
+      }
+    }
 
     // ONLY persist to Supabase when onboarding is actually completed (isOnboarded === true).
     // Never create a default/draft company row in Supabase before the user submits the onboarding form.

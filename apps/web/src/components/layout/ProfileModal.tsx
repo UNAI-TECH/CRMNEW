@@ -130,15 +130,22 @@ export function ProfileModal({
 
       setIsSavingCompany(true);
       try {
-        const {
+        let {
           data: { session },
         } = await supabase.auth.getSession();
+        
+        // If session is expired or missing token, attempt live refresh
+        if (!session?.access_token) {
+          const { data: refreshData } = await supabase.auth.refreshSession().catch(() => ({ data: { session: null } }));
+          if (refreshData?.session) session = refreshData.session;
+        }
+
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
         if (session?.access_token) {
           headers.Authorization = `Bearer ${session.access_token}`;
         }
 
-        const res = await fetch('/api/company-profile', {
+        let res = await fetch('/api/company-profile', {
           method: 'POST',
           headers,
           body: JSON.stringify({
@@ -150,6 +157,28 @@ export function ProfileModal({
             },
           }),
         });
+
+        // If server responded with 401 Unauthorized, refresh session and retry once
+        if (res.status === 401) {
+          try {
+            const { data: refreshData } = await supabase.auth.refreshSession();
+            if (refreshData?.session?.access_token) {
+              headers.Authorization = `Bearer ${refreshData.session.access_token}`;
+              res = await fetch('/api/company-profile', {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                  profile: {
+                    ...companyDraft,
+                    legalName,
+                    tradeName,
+                    isOnboarded: true,
+                  },
+                }),
+              });
+            }
+          } catch {}
+        }
 
         const resJson = await res.json().catch(() => ({}));
         if (!res.ok || resJson.error) {
@@ -448,10 +477,12 @@ export function ProfileModal({
               <span>🏢</span>
               <span>Dealership: <strong style={{ color: '#0F172A' }}>{company.tradeName || company.legalName || 'Dealership'}</strong></span>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#475569' }}>
-              <span>📍</span>
-              <span>Branch: <strong style={{ color: '#0F172A' }}>{company.branchName || 'Main Showroom'}</strong></span>
-            </div>
+            {company.branchName && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#475569' }}>
+                <span>📍</span>
+                <span>Branch: <strong style={{ color: '#0F172A' }}>{company.branchName}</strong></span>
+              </div>
+            )}
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#475569' }}>
               <span>✅</span>
               <span>Status: <strong style={{ color: '#16A34A' }}>{company.isOnboarded ? 'Onboarded & Verified' : 'Pending Setup'}</strong></span>

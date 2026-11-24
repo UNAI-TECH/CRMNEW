@@ -33,7 +33,13 @@ import {
   LayoutGrid,
 } from 'lucide-react';
 import { ProfileModal } from '@/components/layout/ProfileModal';
-import { getModules, fetchModules, DealershipModule, DEFAULT_MODULES } from '@/lib/client/stores/modules-registry';
+import {
+  getModules,
+  fetchModules,
+  DealershipModule,
+  DEFAULT_MODULES,
+  sortModulesByCanonicalOrder,
+} from '@/lib/client/stores/modules-registry';
 import {
   getCompanyProfile,
   fetchCompanyProfile,
@@ -43,7 +49,7 @@ import {
   compressDataUrl,
 } from '@/lib/client/stores/company-store';
 import { getUserSession, UserSession } from '@/lib/client/auth-context';
-import { getEmployees } from '@/lib/client/stores/employee-store';
+import { getEmployees, EmployeeAccessControl } from '@/lib/client/stores/employee-store';
 import {
   isStandaloneShellPath,
   isWorkspaceContentPath,
@@ -191,7 +197,15 @@ function getModuleVisual(tab: { label: string; icon?: string }) {
   };
 }
 
-export function Shell({ children }: { children: React.ReactNode }) {
+export function Shell({
+  children,
+  initialSession,
+  initialDealershipName,
+}: {
+  children: React.ReactNode;
+  initialSession?: any;
+  initialDealershipName?: string;
+}) {
   const router = useRouter();
   const pathname = usePathname();
   const { userContext, activeRole, logout, updateUserProfile, session: authSession } = useAuth();
@@ -237,18 +251,25 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
     // Initial load
     setModules(getModules());
-    fetchModules().then((m) => {
-      if (m && m.length > 0) setModules(m);
-    });
     setCompany(getCompanyProfile());
-    fetchCompanyProfile().then((p) => {
-      if (p) setCompany(p);
-      const sess = getUserSession();
-      const isStaff = Boolean(sess?.employeeId && !sess?.isAdmin);
-      if (!isStaff && p && !p.isOnboarded && isWorkspaceContentPath(pathname)) {
-        router.replace('/onboarding');
-      }
-    });
+
+    const isStaff = pathname.startsWith('/empportal') || Boolean(activeSession?.employeeId && !activeSession?.isAdmin);
+    const isStandalone = isStandaloneShellPath(pathname);
+
+    // Only query remote Supabase module plugins for admin workspace sessions (never on staff portal or public login)
+    if (!isStaff && !isStandalone) {
+      fetchModules().then((m) => {
+        if (m && m.length > 0) setModules(m);
+      });
+      fetchCompanyProfile().then((p) => {
+        if (p) setCompany(p);
+        const sess = getUserSession();
+        const staffSess = Boolean(sess?.employeeId && !sess?.isAdmin);
+        if (!staffSess && p && !p.isOnboarded && isWorkspaceContentPath(pathname)) {
+          router.replace('/onboarding');
+        }
+      });
+    }
 
     try {
       const savedNotifs = localStorage.getItem('crm_dealership_notifications_v1');
@@ -301,18 +322,33 @@ export function Shell({ children }: { children: React.ReactNode }) {
     }
   }, [pathname]);
 
-  const activeSession = authSession || sessionState || (isMounted ? getUserSession() : null);
-  const isStaffEmployee = Boolean(activeSession?.employeeId && !activeSession?.isAdmin);
+  const isStaffRoute = pathname.startsWith('/empportal');
+  const activeSession = authSession || sessionState || (isMounted ? getUserSession() : null) || initialSession;
+  const isStaffEmployee = isStaffRoute || Boolean(activeSession?.employeeId && !activeSession?.isAdmin);
+
+  const DEFAULT_STAFF_ACCESS: EmployeeAccessControl = {
+    pipeline: true,
+    customers: true,
+    inventory: true,
+    procurement: false,
+    deals: true,
+    finance: true,
+    testDrives: true,
+    documents: true,
+    reports: true,
+    settings: false,
+  };
 
   const employeeAccess = useMemo(() => {
     if (activeSession?.accessControl) return activeSession.accessControl;
     if (activeSession?.employeeId || activeSession?.employeeCode) {
       const allEmps = getEmployees();
-      const found = allEmps.find(
-        (e) =>
-          e.id === activeSession.employeeId ||
-          (activeSession.employeeCode && e.employeeCode.toLowerCase() === activeSession.employeeCode.toLowerCase())
-      );
+      const found = allEmps.find((e) => {
+        if (activeSession.employeeId && e.id === activeSession.employeeId) return true;
+        const empCode = (e.userId || e.employeeCode || '').trim().toLowerCase();
+        const sessCode = (activeSession.employeeCode || '').trim().toLowerCase();
+        return Boolean(sessCode && empCode && empCode === sessCode);
+      });
       if (found) return found.accessControl;
     }
     return undefined;
@@ -330,6 +366,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const activeNavTabs = useMemo(() => {
     // If logged in as staff employee (non-admin)
     if (isStaffEmployee) {
+      const access = employeeAccess || DEFAULT_STAFF_ACCESS;
       const allowed: { id: string; label: string; href: string; icon: string; description?: string }[] = [
         {
           id: 'mod-empportal',
@@ -340,16 +377,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
         },
       ];
 
-      if (employeeAccess?.pipeline) {
-        allowed.push({
-          id: 'crm-pipeline',
-          label: 'Pipeline',
-          href: '/crm/leads',
-          icon: 'Filter',
-          description: 'Lead enquiries & pipeline stages',
-        });
-      }
-      if (employeeAccess?.customers) {
+      if (access.customers) {
         allowed.push({
           id: 'crm-customers',
           label: 'Customers',
@@ -358,43 +386,16 @@ export function Shell({ children }: { children: React.ReactNode }) {
           description: 'Customer profiles & contact directory',
         });
       }
-      if (employeeAccess?.testDrives) {
+      if (access.pipeline) {
         allowed.push({
-          id: 'mod-test-drives',
-          label: 'Test Drives',
-          href: '/test-drives',
-          icon: 'Gauge',
-          description: 'Vehicle test drive bookings & logs',
+          id: 'crm-pipeline',
+          label: 'Pipeline',
+          href: '/crm/leads',
+          icon: 'Filter',
+          description: 'Lead enquiries & pipeline stages',
         });
       }
-      if (employeeAccess?.inventory) {
-        allowed.push({
-          id: 'mod-inventory',
-          label: 'Inventory',
-          href: '/vehicles',
-          icon: 'Car',
-          description: 'Showroom vehicle stock',
-        });
-      }
-      if (employeeAccess?.procurement) {
-        allowed.push({
-          id: 'mod-procurement',
-          label: 'Procurement',
-          href: '/vehicles/procurement',
-          icon: 'Layers',
-          description: 'Vehicle intake & procurement',
-        });
-      }
-      if (employeeAccess?.deals) {
-        allowed.push({
-          id: 'mod-deals',
-          label: 'Deals',
-          href: '/sales/deals',
-          icon: 'BadgePercent',
-          description: 'Commercial deal negotiations',
-        });
-      }
-      if (employeeAccess?.finance) {
+      if (access.finance) {
         allowed.push({
           id: 'mod-finance',
           label: 'Finance',
@@ -403,7 +404,34 @@ export function Shell({ children }: { children: React.ReactNode }) {
           description: 'Receipts & settlement vouchers',
         });
       }
-      if (employeeAccess?.documents) {
+      if (access.inventory) {
+        allowed.push({
+          id: 'mod-inventory',
+          label: 'Inventory',
+          href: '/vehicles',
+          icon: 'Car',
+          description: 'Showroom vehicle stock',
+        });
+      }
+      if (access.procurement) {
+        allowed.push({
+          id: 'mod-procurement',
+          label: 'Procurement',
+          href: '/vehicles/procurement',
+          icon: 'Layers',
+          description: 'Vehicle intake & procurement',
+        });
+      }
+      if (access.deals) {
+        allowed.push({
+          id: 'mod-deals',
+          label: 'Deals',
+          href: '/sales/deals',
+          icon: 'BadgePercent',
+          description: 'Commercial deal negotiations',
+        });
+      }
+      if (access.documents) {
         allowed.push({
           id: 'mod-documents',
           label: 'Documents',
@@ -412,7 +440,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
           description: 'Delivery gate & KYC documents',
         });
       }
-      if (employeeAccess?.reports) {
+      if (access.reports) {
         allowed.push({
           id: 'mod-reports',
           label: 'Reports',
@@ -421,15 +449,24 @@ export function Shell({ children }: { children: React.ReactNode }) {
           description: 'Individual activity metrics',
         });
       }
+      if (access.testDrives) {
+        allowed.push({
+          id: 'mod-test-drives',
+          label: 'Test Drives',
+          href: '/test-drives',
+          icon: 'Gauge',
+          description: 'Vehicle test drive bookings & logs',
+        });
+      }
 
       return allowed;
     }
 
-    // Default for Administrators: show all plugged-in modules with non-empty label and unique href/label
+    // Default for Administrators: show all plugged-in modules with non-empty label and unique href/label, sorted in canonical order
     const seenHrefs = new Set<string>();
     const seenLabels = new Set<string>();
     const rawList = modules.filter((m) => m && m.isPluggedIn);
-    return rawList.filter((m: any) => {
+    const validModules = rawList.filter((m: any) => {
       const label = String(m?.label || '').trim();
       const href = String(m?.href || '').trim().replace(/\/+$/, '') || '/';
       const lowerLabel = label.toLowerCase();
@@ -438,6 +475,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
       seenLabels.add(lowerLabel);
       return true;
     });
+    return sortModulesByCanonicalOrder(validModules);
   }, [modules, isStaffEmployee, activeSession, employeeAccess]);
 
   // Active top tab resolution
@@ -494,24 +532,26 @@ export function Shell({ children }: { children: React.ReactNode }) {
     pathname === '';
 
   const userDisplayName = isMounted
-    ? (userContext?.user?.fullName || getUserSession()?.fullName || getUserCredentials()?.fullName || company.authorizedSignatoryName || 'Administrator')
-    : (company.authorizedSignatoryName || 'Administrator');
+    ? (userContext?.user?.fullName || getUserSession()?.fullName || getUserCredentials()?.fullName || initialSession?.fullName || company.authorizedSignatoryName || '')
+    : (initialSession?.fullName || company.authorizedSignatoryName || '');
 
   const userEmail = isMounted
-    ? (userContext?.user?.email || getUserSession()?.email || getUserCredentials()?.email || 'autobourn@dealership.com')
-    : 'autobourn@dealership.com';
+    ? (userContext?.user?.email || getUserSession()?.email || getUserCredentials()?.email || '')
+    : '';
 
   const userAvatarUrl = isMounted
     ? (userContext?.user?.avatarUrl || (typeof window !== 'undefined' ? localStorage.getItem('crm_user_avatar') : null) || '')
     : '';
 
   const userInitials = userDisplayName
-    .split(' ')
-    .filter(Boolean)
-    .map((n: string) => n[0])
-    .join('')
-    .slice(0, 2)
-    .toUpperCase() || 'A';
+    ? userDisplayName
+        .split(' ')
+        .filter(Boolean)
+        .map((n: string) => n[0])
+        .join('')
+        .slice(0, 2)
+        .toUpperCase()
+    : '';
 
   const userRoleDisplay = (isMounted && activeRole ? activeRole : 'tenant_admin').replace('_', ' ');
 
@@ -692,7 +732,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
     );
   }
 
-  const brandDisplayName = isMounted ? (company.tradeName || company.legalName || 'UNAI CRM') : 'UNAI CRM';
+  const brandDisplayName = isMounted
+    ? company.tradeName || company.legalName || initialDealershipName || ''
+    : initialDealershipName || '';
 
   return (
     <div className="app-shell" style={{ display: 'block', minHeight: '100vh', width: '100%' }}>
@@ -704,7 +746,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
           <Link
             href={isStaffEmployee ? '/empportal' : '/dashboard'}
             className="brand-link"
-            title={brandDisplayName}
+            title={brandDisplayName || 'Dealership Workspace'}
           >
             {displayLogoUrl ? (
               <picture>
@@ -713,25 +755,31 @@ export function Shell({ children }: { children: React.ReactNode }) {
                 )}
                 <img
                   src={displayLogoUrl}
-                  alt={brandDisplayName}
+                  alt={brandDisplayName || 'Dealership Logo'}
                   className="brand-logo-img"
                   width={38}
                   height={38}
                   decoding="async"
                 />
               </picture>
-            ) : (
-              <div className="brand-badge" suppressHydrationWarning>
+            ) : brandDisplayName ? (
+              <div className="brand-badge" id="top-bar-brand-badge" suppressHydrationWarning>
                 {brandDisplayName.charAt(0).toUpperCase()}
               </div>
+            ) : (
+              <div className="brand-badge" id="top-bar-brand-badge" suppressHydrationWarning style={{ display: 'none' }} />
             )}
-            <span className="brand-title" suppressHydrationWarning style={{ maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {brandDisplayName}
-            </span>
+            {brandDisplayName ? (
+              <span className="brand-title" id="top-bar-brand-title" suppressHydrationWarning style={{ maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {brandDisplayName}
+              </span>
+            ) : (
+              <span className="brand-title" id="top-bar-brand-title" suppressHydrationWarning style={{ maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'none' }} />
+            )}
           </Link>
 
           {/* Center: Horizontal Capsule Nav Tabs (Spans across to fill space with balanced alignment) */}
-          <nav className="nav-pills" aria-label="Dealership Navigation">
+          <nav className="nav-pills" aria-label="Dealership Navigation" suppressHydrationWarning>
             {activeNavTabs
               .filter((tab: any) => tab && typeof tab.label === 'string' && tab.label.trim().length >= 2 && Boolean(tab.href))
               .map((tab: any) => (
@@ -1131,9 +1179,13 @@ export function Shell({ children }: { children: React.ReactNode }) {
                       display: 'block',
                     }}
                   />
-                ) : (
+                ) : userInitials ? (
                   <div className="avatar-circle">
                     {userInitials}
+                  </div>
+                ) : (
+                  <div className="avatar-circle" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <User size={15} />
                   </div>
                 )}
               </button>

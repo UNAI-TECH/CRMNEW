@@ -290,37 +290,7 @@ export default function DashboardPage() {
   }, [deals]);
 
   const targetMetCount = activeRevenueData.filter(d => d.target > 0 && d.revenue >= d.target).length;
-  const brandDisplayName = isMounted ? (company.tradeName || company.legalName || 'UNAI CRM') : 'UNAI CRM';
-
-  if (!isMounted) {
-    return (
-      <div
-        style={{
-          minHeight: '60vh',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: '12px',
-          color: '#64748B',
-          fontSize: '0.92rem',
-          fontWeight: 600,
-        }}
-      >
-        <div
-          style={{
-            width: '32px',
-            height: '32px',
-            borderRadius: '50%',
-            border: '3px solid #E2E8F0',
-            borderTopColor: '#6253F8',
-            animation: 'spin 0.8s linear infinite',
-          }}
-        />
-        <span>Verifying dealership workspace...</span>
-      </div>
-    );
-  }
+  const brandDisplayName = company.tradeName || company.legalName || '';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
@@ -332,8 +302,8 @@ export default function DashboardPage() {
           </h1>
           <p className="hero-subtitle">
             <WordFadeIn
-              key={brandDisplayName}
-              text={`${brandDisplayName} · Real-time pipeline velocity, stockyard valuation & delivery gates`}
+              key={brandDisplayName || 'workspace'}
+              text={`${brandDisplayName ? `${brandDisplayName} · ` : ''}Real-time pipeline velocity, stockyard valuation & delivery gates`}
               baseDelay={0.18}
               staggerDelay={0.035}
             />
@@ -1155,9 +1125,11 @@ export default function DashboardPage() {
                 <div style={{ fontWeight: 800, fontSize: '0.92rem', color: 'var(--text)', marginTop: '3px' }}>
                   {selectedLeadCustomer.lead.source || 'Walk-in Showroom'}
                 </div>
-                <div style={{ fontSize: '0.75rem', color: 'var(--muted)', marginTop: '2px' }}>
-                  Branch: Main Showroom
-                </div>
+                {selectedLeadCustomer.lead.branchName && (
+                  <div style={{ fontSize: '0.75rem', color: 'var(--muted)', marginTop: '2px' }}>
+                    Branch: {selectedLeadCustomer.lead.branchName}
+                  </div>
+                )}
               </div>
             </div>
 

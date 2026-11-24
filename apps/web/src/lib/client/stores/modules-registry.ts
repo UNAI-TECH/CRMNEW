@@ -29,6 +29,26 @@ export const DEFAULT_MODULES: DealershipModule[] = [
     isPluggedIn: true,
   },
   {
+    id: 'mod-employees',
+    label: 'Employees',
+    href: '/employees',
+    icon: 'UserCheck',
+    category: 'Workforce',
+    description: 'Staff directory, Employee ID & CRM password credentials, leave record tracking, and modular section access control.',
+    isCore: false,
+    isPluggedIn: true,
+  },
+  {
+    id: 'mod-customers',
+    label: 'Customers',
+    href: '/crm/customers',
+    icon: 'Users',
+    category: 'Core CRM',
+    description: '360° individual & fleet client profiles, Aadhaar/PAN KYC status, communication consent & history.',
+    isCore: true,
+    isPluggedIn: true,
+  },
+  {
     id: 'mod-pipeline',
     label: 'Pipeline',
     href: '/crm/leads',
@@ -39,12 +59,12 @@ export const DEFAULT_MODULES: DealershipModule[] = [
     isPluggedIn: true,
   },
   {
-    id: 'mod-customers',
-    label: 'Customers',
-    href: '/crm/customers',
-    icon: 'Users',
-    category: 'Core CRM',
-    description: '360° individual & fleet client profiles, Aadhaar/PAN KYC status, communication consent & history.',
+    id: 'mod-finance',
+    label: 'Finance',
+    href: '/finance',
+    icon: 'CreditCard',
+    category: 'Operations',
+    description: 'Settlement tracking, money receipts, watermarked GST tax invoices, and multi-mode payment verification.',
     isCore: true,
     isPluggedIn: true,
   },
@@ -89,16 +109,6 @@ export const DEFAULT_MODULES: DealershipModule[] = [
     isPluggedIn: true,
   },
   {
-    id: 'mod-finance',
-    label: 'Finance',
-    href: '/finance',
-    icon: 'CreditCard',
-    category: 'Operations',
-    description: 'Settlement tracking, money receipts, watermarked GST tax invoices, and multi-mode payment verification.',
-    isCore: true,
-    isPluggedIn: true,
-  },
-  {
     id: 'mod-documents',
     label: 'Documents',
     href: '/documents',
@@ -119,16 +129,6 @@ export const DEFAULT_MODULES: DealershipModule[] = [
     isPluggedIn: true,
   },
   {
-    id: 'mod-employees',
-    label: 'Employees',
-    href: '/employees',
-    icon: 'UserCheck',
-    category: 'Workforce',
-    description: 'Staff directory, Employee ID & CRM password credentials, leave record tracking, and modular section access control.',
-    isCore: false,
-    isPluggedIn: true,
-  },
-  {
     id: 'mod-test-drives',
     label: 'Test Drives',
     href: '/test-drives',
@@ -139,6 +139,32 @@ export const DEFAULT_MODULES: DealershipModule[] = [
     isPluggedIn: true,
   },
 ];
+
+export const CANONICAL_MODULE_ORDER: Record<string, number> = {
+  '/dashboard': 0,
+  '/employees': 1,
+  '/crm/customers': 2,
+  '/crm/leads': 3,
+  '/finance': 4,
+  '/crm/appointments': 5,
+  '/vehicles': 6,
+  '/vehicles/procurement': 7,
+  '/sales/deals': 8,
+  '/documents': 9,
+  '/reports': 10,
+  '/test-drives': 11,
+};
+
+export function sortModulesByCanonicalOrder<T extends { href: string; label?: string }>(moduleList: T[]): T[] {
+  return [...moduleList].sort((a, b) => {
+    const aHref = (a.href || '').replace(/\/+$/, '') || '/';
+    const bHref = (b.href || '').replace(/\/+$/, '') || '/';
+    const orderA = CANONICAL_MODULE_ORDER[aHref] ?? 999;
+    const orderB = CANONICAL_MODULE_ORDER[bHref] ?? 999;
+    if (orderA !== orderB) return orderA - orderB;
+    return String(a.label || '').localeCompare(String(b.label || ''));
+  });
+}
 
 function getModulesStorageKey(): string {
   return getScopedKey(STORAGE_KEY);
@@ -194,9 +220,10 @@ export function getModules(): DealershipModule[] {
         }
       }
 
-      localStorage.setItem(key, JSON.stringify(sanitized));
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitized));
-      return sanitized;
+      const sorted = sortModulesByCanonicalOrder(sanitized);
+      localStorage.setItem(key, JSON.stringify(sorted));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(sorted));
+      return sorted;
     }
     return DEFAULT_MODULES;
   } catch (err) {
@@ -323,6 +350,7 @@ export function hydrateModulesFromApi(apiModules: any[]): DealershipModule[] {
     });
   }
 
-  saveModules(base);
-  return base;
+  const sorted = sortModulesByCanonicalOrder(base);
+  saveModules(sorted);
+  return sorted;
 }

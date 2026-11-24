@@ -4,6 +4,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { WordFadeIn } from '@/components/ui/WordFadeIn';
 import { Modal } from '@/components/ui/Modal';
+import { ErrorPopup, triggerErrorPopup } from '@/components/ui/ErrorPopup';
 import {
   getEmployees,
   fetchEmployees,
@@ -14,10 +15,13 @@ import {
   addLeaveRecord,
   updateLeaveRecordStatus,
   deleteEmployee,
+  resetEmployeePassword,
   initEmployeesRealtime,
   Employee,
   EmployeeAccessControl,
 } from '@/lib/client/stores/employee-store';
+import { api } from '@/lib/client/api-client';
+import { Branch } from '@crm/shared-types';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { getUserSession } from '@/lib/client/auth-context';
@@ -69,6 +73,7 @@ export default function EmployeesPage() {
   const [selectedProfileCardEmp, setSelectedProfileCardEmp] = useState<Employee | null>(null);
   const [isEditingDossier, setIsEditingDossier] = useState(false);
   const [editDossierForm, setEditDossierForm] = useState<Partial<Employee>>({});
+  const [availableBranches, setAvailableBranches] = useState<Branch[]>([]);
 
   const PRESET_AVATARS = [
     'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
@@ -88,35 +93,106 @@ export default function EmployeesPage() {
   const handleSaveDossierChanges = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!selectedProfileCardEmp) return;
-    const updated = updateEmployee(selectedProfileCardEmp.id, editDossierForm);
+    if (!editDossierForm.fullName?.trim()) {
+      triggerErrorPopup('Employee full name cannot be blank.', 'Validation Error');
+      return;
+    }
+    const cleanUserId = (editDossierForm.userId || editDossierForm.employeeCode || '').trim().toLowerCase().replace(/\s+/g, '');
+    if (!cleanUserId) {
+      triggerErrorPopup('User ID cannot be blank.', 'Validation Error');
+      return;
+    }
+    const duplicate = employees.find(
+      (emp) =>
+        emp.id !== selectedProfileCardEmp.id &&
+        ((emp.userId && emp.userId.toLowerCase().trim() === cleanUserId) ||
+          (emp.employeeCode && emp.employeeCode.toLowerCase().trim() === cleanUserId))
+    );
+    if (duplicate) {
+      triggerErrorPopup(
+        `User ID '${cleanUserId}' is already assigned to ${duplicate.fullName}. Every staff member must have a unique User ID.`,
+        'Duplicate User ID'
+      );
+      return;
+    }
+    const updated = updateEmployee(selectedProfileCardEmp.id, {
+      ...editDossierForm,
+      userId: cleanUserId,
+      employeeCode: cleanUserId,
+    });
     if (updated) {
       setSelectedProfileCardEmp(updated);
       setEmployees(getEmployees());
       setIsEditingDossier(false);
       showToast(`Employee details for ${updated.fullName} updated successfully!`);
+    } else {
+      triggerErrorPopup('Failed to update employee details.', 'Update Error');
     }
   };
 
-  const handleImageFileChange = (e: React.ChangeEvent<HTMLInputElement>, target: 'add' | 'edit') => {
+  const compressImage = (file: File, maxDim: number = 180, quality: number = 0.85): Promise<string> => {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const rawData = e.target?.result as string;
+        if (!rawData) return resolve('');
+        const img = new Image();
+        img.onload = () => {
+          let { width, height } = img;
+          if (width > height) {
+            if (width > maxDim) {
+              height = Math.round((height * maxDim) / width);
+              width = maxDim;
+            }
+          } else {
+            if (height > maxDim) {
+              width = Math.round((width * maxDim) / height);
+              height = maxDim;
+            }
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, width);
+          canvas.height = Math.max(1, height);
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            resolve(rawData);
+            return;
+          }
+          ctx.drawImage(img, 0, 0, width, height);
+          let compressed = canvas.toDataURL('image/webp', quality);
+          if (!compressed.startsWith('data:image/webp')) {
+            compressed = canvas.toDataURL('image/jpeg', quality);
+          }
+          resolve(compressed);
+        };
+        img.onerror = () => resolve(rawData);
+        img.src = rawData;
+      };
+      reader.onerror = () => resolve('');
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleImageFileChange = async (e: React.ChangeEvent<HTMLInputElement>, target: 'add' | 'edit') => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 3 * 1024 * 1024) {
-      showToast('Image size exceeds 3MB. Please select a smaller photo.');
+    if (file.size > 5 * 1024 * 1024) {
+      triggerErrorPopup('Image size exceeds 5MB. Please select a smaller photo.', 'File Size Exceeded');
       return;
     }
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const result = event.target?.result as string;
-      if (result) {
+    try {
+      const compressed = await compressImage(file, 180, 0.85);
+      if (compressed) {
         if (target === 'add') {
-          setNewEmpForm((prev) => ({ ...prev, avatarUrl: result }));
+          setNewEmpForm((prev) => ({ ...prev, avatarUrl: compressed }));
         } else {
-          setEditDossierForm((prev) => ({ ...prev, avatarUrl: result }));
+          setEditDossierForm((prev) => ({ ...prev, avatarUrl: compressed }));
         }
-        showToast('Photo uploaded successfully!');
+        showToast('Photo uploaded and optimized successfully!');
       }
-    };
-    reader.readAsDataURL(file);
+    } catch {
+      triggerErrorPopup('Failed to process uploaded image file.', 'Image Processing Error');
+    }
   };
 
   const toggleEmployeeCard = (id: string) => {
@@ -135,11 +211,11 @@ export default function EmployeesPage() {
     isOpen: boolean;
     employee: Employee | null;
   }>({ isOpen: false, employee: null });
-  const [showTempPassInModal, setShowTempPassInModal] = useState(false);
   const [showAccessRolesExpanded, setShowAccessRolesExpanded] = useState(true);
 
-  // New Employee Form matching user screenshot
+  // New Employee Form matching user requirements
   const [newEmpForm, setNewEmpForm] = useState({
+    userId: '',
     fullName: '',
     designation: '',
     customDesignation: '',
@@ -149,9 +225,8 @@ export default function EmployeesPage() {
     salaryCategory: 'Annual CTC',
     isAdmin: false,
     department: 'Sales' as any,
-    branch: 'Main Showroom',
+    branch: '',
     employeeCode: '',
-    password: '',
     avatarUrl: '',
     accessControl: {
       pipeline: true,
@@ -168,12 +243,8 @@ export default function EmployeesPage() {
   });
 
   const handleOpenAddModal = () => {
-    const currentList = getEmployees();
-    const nextCount = currentList.length + 1;
-    const nextCode = `EMP-${String(nextCount).padStart(3, '0')}`;
-    const generatedPass = `Temp@${Math.floor(1000 + Math.random() * 9000)}`;
-
     setNewEmpForm({
+      userId: '',
       fullName: '',
       designation: '',
       customDesignation: '',
@@ -183,9 +254,8 @@ export default function EmployeesPage() {
       salaryCategory: 'Annual CTC',
       isAdmin: false,
       department: 'Sales',
-      branch: 'Main Showroom',
-      employeeCode: nextCode,
-      password: generatedPass,
+      branch: '',
+      employeeCode: '',
       avatarUrl: '',
       accessControl: {
         pipeline: true,
@@ -200,14 +270,8 @@ export default function EmployeesPage() {
         settings: false,
       },
     });
-    setShowTempPassInModal(false);
     setShowAccessRolesExpanded(true);
     setIsAddModalOpen(true);
-  };
-
-  const handleRegeneratePassword = () => {
-    const generatedPass = `Temp@${Math.floor(1000 + Math.random() * 9000)}`;
-    setNewEmpForm((prev) => ({ ...prev, password: generatedPass }));
   };
 
   const handleRolePreset = (preset: 'all' | 'sales' | 'finance' | 'service' | 'clear') => {
@@ -504,11 +568,40 @@ export default function EmployeesPage() {
     fetchEmployees().then((data) => {
       if (Array.isArray(data)) setEmployees([...data]);
     });
+    // Fetch dealership branches/showrooms created by user
+    setAvailableBranches(api.getBranches());
+    api.fetchBranches().then((bData) => {
+      if (Array.isArray(bData)) setAvailableBranches([...bData]);
+    });
     // Listen for Supabase Realtime changes so deletions in Supabase Table Editor delete live on the frontend
     initEmployeesRealtime();
     const handleChanged = () => setEmployees(getEmployees());
+    const handleBranchesChanged = () => setAvailableBranches(api.getBranches());
     window.addEventListener('crm-employees-changed', handleChanged);
-    return () => window.removeEventListener('crm-employees-changed', handleChanged);
+    window.addEventListener('crm-data-changed', handleBranchesChanged);
+
+    // Global client and network error listeners to guarantee a pop-up on any error
+    const handleWindowError = (event: ErrorEvent) => {
+      triggerErrorPopup(
+        event.message || 'An unexpected client-side error occurred.',
+        'Runtime Error',
+        event.error?.stack || `${event.filename}:${event.lineno}`
+      );
+    };
+    const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
+      const reason = event.reason;
+      const msg = typeof reason === 'string' ? reason : reason?.message || 'Asynchronous request failed.';
+      triggerErrorPopup(msg, 'Server / Database Error', reason?.stack);
+    };
+    window.addEventListener('error', handleWindowError);
+    window.addEventListener('unhandledrejection', handleUnhandledRejection);
+
+    return () => {
+      window.removeEventListener('crm-employees-changed', handleChanged);
+      window.removeEventListener('crm-data-changed', handleBranchesChanged);
+      window.removeEventListener('error', handleWindowError);
+      window.removeEventListener('unhandledrejection', handleUnhandledRejection);
+    };
   }, []);
 
   useEffect(() => {
@@ -536,72 +629,162 @@ export default function EmployeesPage() {
 
   const handleCreateEmployee = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newEmpForm.fullName.trim()) {
-      showToast('Please enter the employee full name.');
+
+    // 1. Full Name (Mandatory)
+    const cleanFullName = newEmpForm.fullName.trim();
+    if (!cleanFullName) {
+      triggerErrorPopup('Please enter the employee full name before submitting.', 'Missing Full Name');
+      return;
+    }
+    if (cleanFullName.length < 2) {
+      triggerErrorPopup('Full name must be at least 2 characters long.', 'Invalid Full Name');
       return;
     }
 
-    const resolvedRole =
-      newEmpForm.designation === 'custom'
-        ? (newEmpForm.customDesignation.trim() || 'Staff Member')
-        : (newEmpForm.designation || 'Sales Executive');
+    // 2. User ID (Mandatory)
+    const cleanUserId = newEmpForm.userId.trim().toLowerCase().replace(/\s+/g, '');
+    if (!cleanUserId) {
+      triggerErrorPopup('Please enter a User ID for the employee. Staff use this User ID to log in at /emplogin.', 'Missing User ID');
+      return;
+    }
+    if (cleanUserId.length < 3) {
+      triggerErrorPopup('User ID must be at least 3 characters long (e.g. rohit01, jdoe).', 'Invalid User ID');
+      return;
+    }
 
-    let resolvedDept = 'Sales';
-    const dLower = resolvedRole.toLowerCase();
-    if (dLower.includes('finance') || dLower.includes('account')) resolvedDept = 'Finance';
-    else if (dLower.includes('inventory') || dLower.includes('procurement')) resolvedDept = 'Operations';
-    else if (dLower.includes('service') || dLower.includes('tech')) resolvedDept = 'Service';
-    else if (dLower.includes('manager') || dLower.includes('director')) resolvedDept = 'Management';
-    if (newEmpForm.isAdmin) resolvedDept = 'Admin';
+    // Check for duplicate user ID
+    const duplicate = employees.find(
+      (emp) =>
+        (emp.userId && emp.userId.toLowerCase().trim() === cleanUserId) ||
+        (emp.employeeCode && emp.employeeCode.toLowerCase().trim() === cleanUserId)
+    );
+    if (duplicate) {
+      triggerErrorPopup(
+        `User ID '${cleanUserId}' is already assigned to ${duplicate.fullName} in the database. Every staff member must have a unique User ID.`,
+        'Duplicate User ID Error'
+      );
+      return;
+    }
 
-    const empCode = newEmpForm.employeeCode.trim() || `EMP-${String(employees.length + 1).padStart(3, '0')}`;
-    const tempPass = newEmpForm.password.trim() || `Temp@${Math.floor(1000 + Math.random() * 9000)}`;
+    // 3. Designation / Role (Mandatory)
+    if (!newEmpForm.designation) {
+      triggerErrorPopup('Please select a Designation / Role for the employee.', 'Missing Designation');
+      return;
+    }
+    if (newEmpForm.designation === 'custom' && !newEmpForm.customDesignation.trim()) {
+      triggerErrorPopup('Please enter the custom designation job title.', 'Missing Custom Role');
+      return;
+    }
 
-    const created = addEmployee({
-      fullName: newEmpForm.fullName.trim(),
-      email: newEmpForm.email.trim() || `${empCode.toLowerCase()}@dealership.com`,
-      phone: newEmpForm.phone.trim() || '',
-      designation: resolvedRole,
-      department: resolvedDept as any,
-      branch: newEmpForm.branch,
-      salary: newEmpForm.salary.trim()
-        ? (newEmpForm.salary.startsWith('₹') ? newEmpForm.salary.trim() : `₹${newEmpForm.salary.trim()}`)
-        : (newEmpForm.salaryCategory === 'Annual CTC' ? '₹6,00,000' : '₹50,000'),
-      salaryCategory: newEmpForm.salaryCategory || 'Annual CTC',
-      isAdmin: newEmpForm.isAdmin,
-      employeeCode: empCode,
-      password: tempPass,
-      isTemporaryPassword: true,
-      mustChangePassword: true,
-      avatarUrl: newEmpForm.avatarUrl || '',
-      accessControl: newEmpForm.isAdmin ? {
-        pipeline: true,
-        customers: true,
-        inventory: true,
-        procurement: true,
-        deals: true,
-        finance: true,
-        testDrives: true,
-        documents: true,
-        reports: true,
-        settings: true,
-      } : newEmpForm.accessControl,
-    });
+    // 4. Phone Number (Mandatory)
+    const cleanPhone = newEmpForm.phone.trim();
+    if (!cleanPhone) {
+      triggerErrorPopup('Please enter the employee phone number before submitting.', 'Missing Phone Number');
+      return;
+    }
+    const phoneDigits = cleanPhone.replace(/[^0-9]/g, '');
+    if (phoneDigits.length < 7 || phoneDigits.length > 15) {
+      triggerErrorPopup('Please enter a valid phone number (between 7 and 15 digits).', 'Invalid Phone Number');
+      return;
+    }
 
-    setIsAddModalOpen(false);
-    setEmployees(getEmployees());
-    setCreatedCredentialsModal({ isOpen: true, employee: created });
-    showToast(`Employee ${created.fullName} (${created.employeeCode}) onboarded successfully!`);
+    // 5. Email Address (Mandatory & Validated)
+    const rawEmail = newEmpForm.email.trim().toLowerCase();
+    if (!rawEmail) {
+      triggerErrorPopup('Please enter an email address for the employee.', 'Missing Email Address');
+      return;
+    }
+    const strictEmailRegex = /^(?:[A-Za-z0-9_'+\-]+(?:\.[A-Za-z0-9_'+\-]+)*)@(?:[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}$/;
+    if (!strictEmailRegex.test(rawEmail)) {
+      triggerErrorPopup('Please enter a valid email address (e.g. name@company.com). The domain must include a valid extension like .com, .in, etc.', 'Invalid Email Address');
+      return;
+    }
 
-    // Refetch in background to ensure Supabase state synchronization
-    fetchEmployees().then((fresh) => {
-      if (Array.isArray(fresh)) setEmployees([...fresh]);
-    });
+    // 6. Annual CTC / Salary (Mandatory)
+    const cleanSalary = newEmpForm.salary.trim();
+    if (!cleanSalary) {
+      triggerErrorPopup('Please enter the employee salary / CTC amount.', 'Missing Salary');
+      return;
+    }
+    const numericSalary = Number(cleanSalary.replace(/[^0-9.]/g, ''));
+    if (isNaN(numericSalary) || numericSalary <= 0) {
+      triggerErrorPopup('Please enter a valid positive numeric amount for the salary.', 'Invalid Salary Amount');
+      return;
+    }
+
+    // 7. Salary Category (Mandatory)
+    if (!newEmpForm.salaryCategory) {
+      triggerErrorPopup('Please select a Salary Category (e.g. Annual CTC or Monthly Fixed).', 'Missing Salary Category');
+      return;
+    }
+
+    // 8. Branch / Showroom (Optional - only if branches exist and selected)
+    const resolvedBranch = newEmpForm.branch.trim();
+
+    try {
+      const resolvedRole =
+        newEmpForm.designation === 'custom'
+          ? (newEmpForm.customDesignation.trim() || 'Staff Member')
+          : (newEmpForm.designation || 'Sales Executive');
+
+      let resolvedDept = 'Sales';
+      const dLower = resolvedRole.toLowerCase();
+      if (dLower.includes('finance') || dLower.includes('account')) resolvedDept = 'Finance';
+      else if (dLower.includes('inventory') || dLower.includes('procurement')) resolvedDept = 'Operations';
+      else if (dLower.includes('service') || dLower.includes('tech')) resolvedDept = 'Service';
+      else if (dLower.includes('manager') || dLower.includes('director')) resolvedDept = 'Management';
+      if (newEmpForm.isAdmin) resolvedDept = 'Admin';
+
+      const created = addEmployee({
+        userId: cleanUserId,
+        employeeCode: cleanUserId,
+        fullName: cleanFullName,
+        email: rawEmail,
+        phone: cleanPhone,
+        designation: resolvedRole,
+        department: resolvedDept as any,
+        branch: resolvedBranch,
+        salary: cleanSalary.startsWith('₹') ? cleanSalary : `₹${cleanSalary}`,
+        salaryCategory: newEmpForm.salaryCategory || 'Annual CTC',
+        isAdmin: newEmpForm.isAdmin,
+        isPasswordSet: false,
+        avatarUrl: newEmpForm.avatarUrl || '',
+        accessControl: newEmpForm.isAdmin ? {
+          pipeline: true,
+          customers: true,
+          inventory: true,
+          procurement: true,
+          deals: true,
+          finance: true,
+          testDrives: true,
+          documents: true,
+          reports: true,
+          settings: true,
+        } : newEmpForm.accessControl,
+      });
+
+      setIsAddModalOpen(false);
+      setEmployees(getEmployees());
+      setCreatedCredentialsModal({ isOpen: true, employee: created });
+      showToast(`Employee ${created.fullName} (User ID: ${created.userId}) created successfully!`);
+
+      // Refetch in background to ensure Supabase state synchronization
+      fetchEmployees().then((fresh) => {
+        if (Array.isArray(fresh)) setEmployees([...fresh]);
+      });
+    } catch (err: any) {
+      triggerErrorPopup(err?.message || 'An unexpected error occurred while creating employee.', 'Employee Creation Error');
+    }
   };
 
   const handleApplyLeave = (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedForLeave) return;
+
+    if (new Date(newLeaveForm.startDate) > new Date(newLeaveForm.endDate)) {
+      triggerErrorPopup('Leave start date cannot be later than end date.', 'Invalid Date Range');
+      return;
+    }
 
     addLeaveRecord(selectedForLeave.id, {
       leaveType: newLeaveForm.leaveType,
@@ -663,10 +846,11 @@ export default function EmployeesPage() {
       const matchDept = deptFilter === 'All' || e.department === deptFilter;
       const matchQuery =
         !q ||
-        e.fullName.toLowerCase().includes(q) ||
-        e.employeeCode.toLowerCase().includes(q) ||
-        e.email.toLowerCase().includes(q) ||
-        e.designation.toLowerCase().includes(q);
+        (e.fullName || '').toLowerCase().includes(q) ||
+        (e.userId || '').toLowerCase().includes(q) ||
+        (e.employeeCode || '').toLowerCase().includes(q) ||
+        (e.email || '').toLowerCase().includes(q) ||
+        (e.designation || '').toLowerCase().includes(q);
       return matchDept && matchQuery;
     });
   }, [employees, deptFilter, search]);
@@ -860,6 +1044,13 @@ export default function EmployeesPage() {
                       <img
                         src={emp.avatarUrl}
                         alt={emp.fullName}
+                        onError={(e) => {
+                          const img = e.currentTarget;
+                          img.style.display = 'none';
+                          if (img.parentElement) {
+                            img.parentElement.textContent = emp.fullName.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase();
+                          }
+                        }}
                         style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                       />
                     ) : (
@@ -894,7 +1085,7 @@ export default function EmployeesPage() {
                           border: '1px solid #DBEAFE',
                         }}
                       >
-                        {emp.employeeCode}
+                        {emp.userId || emp.employeeCode}
                       </span>
                       <span className="badge badge-green">{emp.department}</span>
                       {emp.isAdmin && (
@@ -915,24 +1106,7 @@ export default function EmployeesPage() {
                           <Shield size={11} /> Admin Privileges
                         </span>
                       )}
-                      {emp.mustChangePassword ? (
-                        <span
-                          style={{
-                            fontSize: '0.72rem',
-                            padding: '2px 8px',
-                            borderRadius: '6px',
-                            backgroundColor: '#FFFBEB',
-                            color: '#B45309',
-                            border: '1px solid #FDE68A',
-                            fontWeight: 700,
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '4px',
-                          }}
-                        >
-                          <KeyRound size={11} /> Temp Password (1st Login Pending)
-                        </span>
-                      ) : (
+                      {emp.isPasswordSet ? (
                         <span
                           style={{
                             fontSize: '0.72rem',
@@ -949,14 +1123,31 @@ export default function EmployeesPage() {
                         >
                           <CheckCircle2 size={11} /> Permanent Password Active
                         </span>
+                      ) : (
+                        <span
+                          style={{
+                            fontSize: '0.72rem',
+                            padding: '2px 8px',
+                            borderRadius: '6px',
+                            backgroundColor: '#FFFBEB',
+                            color: '#B45309',
+                            border: '1px solid #FDE68A',
+                            fontWeight: 700,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                          }}
+                        >
+                          <KeyRound size={11} /> Password Pending (1st Login Pending)
+                        </span>
                       )}
                     </div>
 
                     <div style={{ fontSize: '0.8rem', color: '#64748B', marginTop: '3px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                      <span>{emp.designation} • {emp.branch}</span>
+                      <span>{emp.branch ? `${emp.designation} • ${emp.branch}` : emp.designation}</span>
                       <span>•</span>
-                      <span style={{ fontWeight: 600, color: '#334155' }}>
-                        {emp.salary || '₹6,00,000'} ({emp.salaryCategory || 'Annual CTC'})
+                      <span style={{ fontWeight: 600, color: emp.salary ? '#334155' : '#94A3B8' }}>
+                        {emp.salary ? `${emp.salary} (${emp.salaryCategory || 'Annual CTC'})` : 'Salary Not Set'}
                       </span>
                     </div>
                   </div>
@@ -965,10 +1156,10 @@ export default function EmployeesPage() {
                 {/* Right: Action Buttons */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                   {(() => {
-                    const casualRem = (emp.leaveBalance?.casual.total || 12) - (emp.leaveBalance?.casual.used || 0);
-                    const sickRem = (emp.leaveBalance?.sick.total || 7) - (emp.leaveBalance?.sick.used || 0);
-                    const paidRem = (emp.leaveBalance?.paid.total || 18) - (emp.leaveBalance?.paid.used || 0);
-                    const totalAvailLeave = Math.max(0, casualRem + sickRem + paidRem);
+                    const casualRem = Math.max(0, (emp.leaveBalance?.casual?.total || 0) - (emp.leaveBalance?.casual?.used || 0));
+                    const sickRem = Math.max(0, (emp.leaveBalance?.sick?.total || 0) - (emp.leaveBalance?.sick?.used || 0));
+                    const paidRem = Math.max(0, (emp.leaveBalance?.paid?.total || 0) - (emp.leaveBalance?.paid?.used || 0));
+                    const totalAvailLeave = casualRem + sickRem + paidRem;
                     const pendingCount = (emp.leaveHistory || []).filter((lh) => lh.status === 'pending').length;
 
                     return (
@@ -1235,10 +1426,36 @@ export default function EmployeesPage() {
                         </button>
                       )}
                     </div>
+
+                    {/* Quick Avatar Presets */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '10px' }}>
+                      <span style={{ fontSize: '0.73rem', color: '#64748B', fontWeight: 600 }}>Or choose preset:</span>
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        {PRESET_AVATARS.slice(0, 5).map((preset, idx) => (
+                          <img
+                            key={idx}
+                            src={preset}
+                            alt="Preset avatar"
+                            onClick={() => setNewEmpForm((prev) => ({ ...prev, avatarUrl: preset }))}
+                            style={{
+                              width: '28px',
+                              height: '28px',
+                              borderRadius: '8px',
+                              objectFit: 'cover',
+                              cursor: 'pointer',
+                              border: newEmpForm.avatarUrl === preset ? '2px solid #4F46E5' : '1.5px solid #CBD5E1',
+                              boxShadow: newEmpForm.avatarUrl === preset ? '0 0 0 2px rgba(79, 70, 229, 0.2)' : 'none',
+                              transition: 'transform 0.1s ease',
+                            }}
+                            title="Click to select this photo"
+                          />
+                        ))}
+                      </div>
+                    </div>
                   </div>
                 </div>
 
-                {/* Row 1: Full Name & Designation / Role */}
+                {/* Row 1: Full Name & User ID */}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px' }}>
                   {/* Full Name */}
                   <div>
@@ -1272,10 +1489,50 @@ export default function EmployeesPage() {
                     </div>
                   </div>
 
+                  {/* User ID */}
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, color: '#1E293B', marginBottom: '6px' }}>
+                      User ID <span style={{ color: '#EF4444' }}>*</span>
+                    </label>
+                    <div style={{ position: 'relative' }}>
+                      <KeyRound
+                        size={16}
+                        style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94A3B8' }}
+                      />
+                      <input
+                        type="text"
+                        required
+                        value={newEmpForm.userId}
+                        onChange={(e) => setNewEmpForm({ ...newEmpForm, userId: e.target.value.toLowerCase().replace(/\s+/g, '') })}
+                        placeholder="e.g. fsafa, rohit01, jdoe"
+                        style={{
+                          width: '100%',
+                          height: '44px',
+                          padding: '0 12px 0 38px',
+                          borderRadius: '12px',
+                          border: '1.5px solid #E2E8F0',
+                          backgroundColor: '#FFFFFF',
+                          fontFamily: 'monospace',
+                          fontWeight: 700,
+                          fontSize: '0.88rem',
+                          color: '#2563EB',
+                          outline: 'none',
+                          boxSizing: 'border-box',
+                        }}
+                      />
+                    </div>
+                    <div style={{ fontSize: '0.72rem', color: '#64748B', marginTop: '4px' }}>
+                      Assigned username for staff sign in at <code>/emplogin</code>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Row 2: Designation / Role & Branch */}
+                <div style={{ display: 'grid', gridTemplateColumns: availableBranches.length > 0 ? 'repeat(auto-fit, minmax(240px, 1fr))' : '1fr', gap: '16px' }}>
                   {/* Designation / Role */}
                   <div>
                     <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, color: '#1E293B', marginBottom: '6px' }}>
-                      Designation / Role
+                      Designation / Role <span style={{ color: '#EF4444' }}>*</span>
                     </label>
                     <div style={{ position: 'relative' }}>
                       <Briefcase
@@ -1283,6 +1540,7 @@ export default function EmployeesPage() {
                         style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94A3B8', pointerEvents: 'none' }}
                       />
                       <select
+                        required
                         value={newEmpForm.designation}
                         onChange={(e) => handleRoleChange(e.target.value)}
                         style={{
@@ -1318,16 +1576,60 @@ export default function EmployeesPage() {
                       </select>
                     </div>
                   </div>
+
+                  {/* Branch / Showroom - ONLY VISIBLE IF SHOWROOMS / BRANCHES CREATED */}
+                  {availableBranches.length > 0 && (
+                    <div>
+                      <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, color: '#1E293B', marginBottom: '6px' }}>
+                        Branch / Showroom <span style={{ fontSize: '0.72rem', color: '#64748B', fontWeight: 500 }}>(Optional)</span>
+                      </label>
+                      <div style={{ position: 'relative' }}>
+                        <Building2
+                          size={16}
+                          style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94A3B8', pointerEvents: 'none' }}
+                        />
+                        <select
+                          value={newEmpForm.branch}
+                          onChange={(e) => setNewEmpForm({ ...newEmpForm, branch: e.target.value })}
+                          style={{
+                            width: '100%',
+                            height: '44px',
+                            padding: '0 32px 0 38px',
+                            borderRadius: '12px',
+                            border: '1.5px solid #E2E8F0',
+                            backgroundColor: '#FFFFFF',
+                            fontSize: '0.88rem',
+                            color: newEmpForm.branch ? '#0F172A' : '#94A3B8',
+                            outline: 'none',
+                            boxSizing: 'border-box',
+                            cursor: 'pointer',
+                            appearance: 'none',
+                            backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394A3B8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")`,
+                            backgroundRepeat: 'no-repeat',
+                            backgroundPosition: 'right 14px center',
+                          }}
+                        >
+                          <option value="">Select Showroom / Branch (Optional)</option>
+                          {availableBranches.map((b) => (
+                            <option key={b.id} value={b.name}>
+                              {b.name} {b.code ? `(${b.code})` : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* If Custom Role selected */}
                 {newEmpForm.designation === 'custom' && (
                   <div>
                     <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, color: '#1E293B', marginBottom: '6px' }}>
-                      Enter Custom Designation / Job Title
+                      Enter Custom Designation / Job Title <span style={{ color: '#EF4444' }}>*</span>
                     </label>
                     <input
                       type="text"
+                      required
                       value={newEmpForm.customDesignation}
                       onChange={(e) => setNewEmpForm({ ...newEmpForm, customDesignation: e.target.value })}
                       placeholder="e.g. Lead Valuator & Inspector"
@@ -1352,7 +1654,7 @@ export default function EmployeesPage() {
                   {/* Phone Number */}
                   <div>
                     <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, color: '#1E293B', marginBottom: '6px' }}>
-                      Phone Number
+                      Phone Number <span style={{ color: '#EF4444' }}>*</span>
                     </label>
                     <div style={{ position: 'relative' }}>
                       <Phone
@@ -1361,6 +1663,7 @@ export default function EmployeesPage() {
                       />
                       <input
                         type="tel"
+                        required
                         value={newEmpForm.phone}
                         onChange={(e) => setNewEmpForm({ ...newEmpForm, phone: e.target.value })}
                         placeholder="e.g. +1 555 0199"
@@ -1383,7 +1686,7 @@ export default function EmployeesPage() {
                   {/* Email Address */}
                   <div>
                     <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, color: '#1E293B', marginBottom: '6px' }}>
-                      Email Address
+                      Email Address <span style={{ color: '#EF4444' }}>*</span>
                     </label>
                     <div style={{ position: 'relative' }}>
                       <Mail
@@ -1392,6 +1695,7 @@ export default function EmployeesPage() {
                       />
                       <input
                         type="email"
+                        required
                         value={newEmpForm.email}
                         onChange={(e) => setNewEmpForm({ ...newEmpForm, email: e.target.value })}
                         placeholder="e.g. john@example.com"
@@ -1418,7 +1722,7 @@ export default function EmployeesPage() {
                   <div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
                       <label style={{ fontSize: '0.82rem', fontWeight: 700, color: '#1E293B' }}>
-                        {newEmpForm.salaryCategory === 'Annual CTC' ? 'Annual CTC (₹)' : 'Salary (₹)'}
+                        {newEmpForm.salaryCategory === 'Annual CTC' ? 'Annual CTC (₹)' : 'Salary (₹)'} <span style={{ color: '#EF4444' }}>*</span>
                       </label>
                       {newEmpForm.salaryCategory === 'Annual CTC' && newEmpForm.salary && !isNaN(Number(newEmpForm.salary.replace(/[^0-9.]/g, ''))) && Number(newEmpForm.salary.replace(/[^0-9.]/g, '')) > 0 && (
                         <span style={{ fontSize: '0.72rem', color: '#16A34A', fontWeight: 700 }}>
@@ -1433,6 +1737,7 @@ export default function EmployeesPage() {
                       />
                       <input
                         type="text"
+                        required
                         value={newEmpForm.salary}
                         onChange={(e) => setNewEmpForm({ ...newEmpForm, salary: e.target.value })}
                         placeholder={newEmpForm.salaryCategory === 'Annual CTC' ? 'e.g. 600000' : 'e.g. 50000'}
@@ -1455,7 +1760,7 @@ export default function EmployeesPage() {
                   {/* Salary Category */}
                   <div>
                     <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, color: '#1E293B', marginBottom: '6px' }}>
-                      Salary Category
+                      Salary Category <span style={{ color: '#EF4444' }}>*</span>
                     </label>
                     <div style={{ position: 'relative' }}>
                       <Calendar
@@ -1463,6 +1768,7 @@ export default function EmployeesPage() {
                         style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94A3B8', pointerEvents: 'none' }}
                       />
                       <select
+                        required
                         value={newEmpForm.salaryCategory}
                         onChange={(e) => setNewEmpForm({ ...newEmpForm, salaryCategory: e.target.value })}
                         style={{
@@ -1686,137 +1992,24 @@ export default function EmployeesPage() {
                   </div>
                 </div>
 
-                {/* Section: LOGIN CREDENTIALS */}
-                <div>
-                  <div
-                    style={{
-                      fontSize: '0.74rem',
-                      fontWeight: 800,
-                      color: '#64748B',
-                      letterSpacing: '0.06em',
-                      textTransform: 'uppercase',
-                      marginBottom: '10px',
-                    }}
-                  >
-                    LOGIN CREDENTIALS
-                  </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px' }}>
-                    {/* Employee ID */}
-                    <div>
-                      <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, color: '#1E293B', marginBottom: '6px' }}>
-                        Employee ID
-                      </label>
-                      <input
-                        type="text"
-                        value={newEmpForm.employeeCode}
-                        onChange={(e) => setNewEmpForm({ ...newEmpForm, employeeCode: e.target.value })}
-                        placeholder="e.g. EMP-001"
-                        style={{
-                          width: '100%',
-                          height: '44px',
-                          padding: '0 14px',
-                          borderRadius: '12px',
-                          border: '1.5px solid #E2E8F0',
-                          backgroundColor: '#F8FAFC',
-                          fontFamily: 'monospace',
-                          fontWeight: 700,
-                          fontSize: '0.88rem',
-                          color: '#2563EB',
-                          outline: 'none',
-                          boxSizing: 'border-box',
-                        }}
-                      />
-                    </div>
-
-                    {/* Temporary Password */}
-                    <div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                        <label style={{ fontSize: '0.82rem', fontWeight: 700, color: '#1E293B' }}>
-                          Temporary Password
-                        </label>
-                        <button
-                          type="button"
-                          onClick={handleRegeneratePassword}
-                          style={{
-                            background: 'none',
-                            border: 'none',
-                            color: '#4F46E5',
-                            fontSize: '0.72rem',
-                            fontWeight: 700,
-                            cursor: 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '3px',
-                          }}
-                        >
-                          <RefreshCw size={11} /> Regenerate
-                        </button>
-                      </div>
-                      <div style={{ position: 'relative' }}>
-                        <Lock
-                          size={16}
-                          style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94A3B8' }}
-                        />
-                        <input
-                          type={showTempPassInModal ? 'text' : 'password'}
-                          value={newEmpForm.password}
-                          onChange={(e) => setNewEmpForm({ ...newEmpForm, password: e.target.value })}
-                          placeholder="Temporary password"
-                          style={{
-                            width: '100%',
-                            height: '44px',
-                            padding: '0 40px 0 38px',
-                            borderRadius: '12px',
-                            border: '1.5px solid #E2E8F0',
-                            backgroundColor: '#FFFFFF',
-                            fontFamily: 'monospace',
-                            fontSize: '0.88rem',
-                            color: '#0F172A',
-                            outline: 'none',
-                            boxSizing: 'border-box',
-                          }}
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setShowTempPassInModal(!showTempPassInModal)}
-                          style={{
-                            position: 'absolute',
-                            right: '12px',
-                            top: '50%',
-                            transform: 'translateY(-50%)',
-                            background: 'none',
-                            border: 'none',
-                            color: '#94A3B8',
-                            cursor: 'pointer',
-                            padding: '4px',
-                          }}
-                        >
-                          {showTempPassInModal ? <EyeOff size={16} /> : <Eye size={16} />}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                      padding: '10px 14px',
-                      backgroundColor: '#F8FAFC',
-                      borderRadius: '10px',
-                      border: '1px solid #E2E8F0',
-                      marginTop: '12px',
-                      fontSize: '0.76rem',
-                      color: '#475569',
-                      lineHeight: '1.4',
-                    }}
-                  >
-                    <KeyRound size={15} style={{ color: '#4F46E5', flexShrink: 0 }} />
-                    <span>
-                      <strong>First-Time Login Workflow:</strong> Give this temporary password to the employee. When they log in at <code>/emplogin</code>, they will be required to create their own personal password before accessing the system.
-                    </span>
+                {/* Workflow Info: Direct Permanent Password on 1st Login */}
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '12px',
+                    padding: '14px 16px',
+                    backgroundColor: '#F0FDF4',
+                    borderRadius: '12px',
+                    border: '1px solid #BBF7D0',
+                    fontSize: '0.8rem',
+                    color: '#166534',
+                    lineHeight: '1.45',
+                  }}
+                >
+                  <KeyRound size={20} style={{ color: '#16A34A', flexShrink: 0 }} />
+                  <div>
+                    <strong>First-Time Login Security Workflow:</strong> Give the assigned <strong>User ID</strong> to the staff member. When they log in at <code>/emplogin</code>, the system will verify their User ID in the database and prompt them to create their secure permanent password. No temporary password needed.
                   </div>
                 </div>
               </div>
@@ -1882,7 +2075,7 @@ export default function EmployeesPage() {
         <Modal
           isOpen={createdCredentialsModal.isOpen}
           onClose={() => setCreatedCredentialsModal({ isOpen: false, employee: null })}
-          title="Employee Login Created Successfully!"
+          title="Employee Account Created Successfully!"
           maxWidth="560px"
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: '18px', padding: '4px' }}>
@@ -1891,17 +2084,17 @@ export default function EmployeesPage() {
                 display: 'flex',
                 alignItems: 'center',
                 gap: '12px',
-                padding: '14px',
-                backgroundColor: '#DCFCE7',
+                padding: '14px 16px',
+                backgroundColor: '#F0FDF4',
                 borderRadius: '14px',
-                border: '1px solid #86EFAC',
+                border: '1px solid #BBF7D0',
               }}
             >
               <div
                 style={{
-                  width: '40px',
-                  height: '40px',
-                  borderRadius: '10px',
+                  width: '42px',
+                  height: '42px',
+                  borderRadius: '12px',
                   backgroundColor: '#16A34A',
                   color: '#FFFFFF',
                   display: 'flex',
@@ -1913,99 +2106,59 @@ export default function EmployeesPage() {
                 <CheckCircle2 size={24} />
               </div>
               <div>
-                <div style={{ fontSize: '0.95rem', fontWeight: 800, color: '#14532D' }}>
+                <div style={{ fontSize: '0.98rem', fontWeight: 800, color: '#14532D' }}>
                   {createdCredentialsModal.employee.fullName}
                 </div>
                 <div style={{ fontSize: '0.78rem', color: '#166534' }}>
-                  {createdCredentialsModal.employee.designation} • Temporary credentials generated
+                  {createdCredentialsModal.employee.designation} • {createdCredentialsModal.employee.department}
                 </div>
               </div>
             </div>
 
             <div style={{ fontSize: '0.84rem', color: '#475569', lineHeight: '1.45' }}>
-              Share these temporary login details with the staff member. They will be prompted to create their own permanent password upon signing in.
+              The employee account has been saved in the dealership database. Share the assigned <strong>User ID</strong> below with the staff member. They will create their permanent secure password directly upon signing in.
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              {/* Employee ID */}
+              {/* User ID */}
               <div
                 style={{
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'space-between',
-                  padding: '12px 14px',
+                  padding: '14px 16px',
                   borderRadius: '12px',
                   backgroundColor: '#F8FAFC',
                   border: '1.5px solid #E2E8F0',
                 }}
               >
                 <div>
-                  <div style={{ fontSize: '0.7rem', color: '#64748B', fontWeight: 700, textTransform: 'uppercase' }}>
-                    Employee ID
+                  <div style={{ fontSize: '0.7rem', color: '#64748B', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                    Assigned User ID
                   </div>
-                  <div style={{ fontSize: '1rem', fontWeight: 800, color: '#1E293B', fontFamily: 'monospace' }}>
-                    {createdCredentialsModal.employee.employeeCode}
+                  <div style={{ fontSize: '1.15rem', fontWeight: 800, color: '#1E293B', fontFamily: 'monospace' }}>
+                    {createdCredentialsModal.employee.userId || createdCredentialsModal.employee.employeeCode}
                   </div>
                 </div>
                 <button
                   type="button"
-                  onClick={() => handleCopy(createdCredentialsModal.employee!.employeeCode, 'cred-id')}
+                  onClick={() => handleCopy(createdCredentialsModal.employee!.userId || createdCredentialsModal.employee!.employeeCode, 'cred-id')}
                   style={{
                     display: 'inline-flex',
                     alignItems: 'center',
                     gap: '4px',
-                    padding: '6px 12px',
+                    padding: '8px 14px',
                     borderRadius: '8px',
                     border: '1px solid #CBD5E1',
                     background: '#FFFFFF',
-                    fontSize: '0.76rem',
+                    fontSize: '0.78rem',
                     fontWeight: 700,
+                    color: '#0F172A',
                     cursor: 'pointer',
                   }}
                 >
                   {copiedId === 'cred-id' ? <Check size={14} style={{ color: '#16A34A' }} /> : <Copy size={14} />}
-                  <span>{copiedId === 'cred-id' ? 'Copied' : 'Copy ID'}</span>
-                </button>
-              </div>
-
-              {/* Temporary Password */}
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  padding: '12px 14px',
-                  borderRadius: '12px',
-                  backgroundColor: '#F8FAFC',
-                  border: '1.5px solid #E2E8F0',
-                }}
-              >
-                <div>
-                  <div style={{ fontSize: '0.7rem', color: '#64748B', fontWeight: 700, textTransform: 'uppercase' }}>
-                    Temporary Password
-                  </div>
-                  <div style={{ fontSize: '1rem', fontWeight: 800, color: '#4F46E5', fontFamily: 'monospace' }}>
-                    {createdCredentialsModal.employee.password}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => handleCopy(createdCredentialsModal.employee!.password, 'cred-pass')}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '4px',
-                    padding: '6px 12px',
-                    borderRadius: '8px',
-                    border: '1px solid #CBD5E1',
-                    background: '#FFFFFF',
-                    fontSize: '0.76rem',
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                  }}
-                >
-                  {copiedId === 'cred-pass' ? <Check size={14} style={{ color: '#16A34A' }} /> : <Copy size={14} />}
-                  <span>{copiedId === 'cred-pass' ? 'Copied' : 'Copy Password'}</span>
+                  <span>{copiedId === 'cred-id' ? 'Copied' : 'Copy User ID'}</span>
                 </button>
               </div>
 
@@ -2015,7 +2168,7 @@ export default function EmployeesPage() {
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'space-between',
-                  padding: '12px 14px',
+                  padding: '12px 16px',
                   borderRadius: '12px',
                   backgroundColor: '#EEF2FF',
                   border: '1.5px solid #C7D2FE',
@@ -2025,7 +2178,7 @@ export default function EmployeesPage() {
                   <div style={{ fontSize: '0.7rem', color: '#4338CA', fontWeight: 700, textTransform: 'uppercase' }}>
                     Staff Login URL
                   </div>
-                  <div style={{ fontSize: '0.86rem', fontWeight: 700, color: '#312E81' }}>
+                  <div style={{ fontSize: '0.88rem', fontWeight: 700, color: '#312E81' }}>
                     /emplogin
                   </div>
                 </div>
@@ -2050,6 +2203,26 @@ export default function EmployeesPage() {
                   <span>{copiedId === 'cred-url' ? 'Copied' : 'Copy URL'}</span>
                 </button>
               </div>
+
+              {/* Security note */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '10px 14px',
+                  backgroundColor: '#F0FDF4',
+                  borderRadius: '10px',
+                  border: '1px solid #BBF7D0',
+                  fontSize: '0.76rem',
+                  color: '#166534',
+                }}
+              >
+                <KeyRound size={15} style={{ flexShrink: 0, color: '#16A34A' }} />
+                <span>
+                  <strong>First-Time Login Workflow:</strong> No temporary password needed. Staff visits <code>/emplogin</code>, enters this User ID, and creates their own permanent strong password.
+                </span>
+              </div>
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '10px' }}>
@@ -2070,7 +2243,7 @@ export default function EmployeesPage() {
                 Done
               </button>
               <Link
-                href={`/emplogin?emp=${createdCredentialsModal.employee.employeeCode}`}
+                href={`/emplogin?emp=${encodeURIComponent(createdCredentialsModal.employee.userId || createdCredentialsModal.employee.employeeCode)}`}
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
@@ -2085,7 +2258,7 @@ export default function EmployeesPage() {
                   boxShadow: '0 4px 12px rgba(79, 70, 229, 0.3)',
                 }}
               >
-                <span>Open Employee Login (/emplogin)</span>
+                <span>Test Staff Login</span>
                 <ExternalLink size={14} />
               </Link>
             </div>
@@ -2740,6 +2913,30 @@ export default function EmployeesPage() {
                         </button>
                       )}
                     </div>
+                    {/* Quick Avatar Presets in Dossier */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
+                      <span style={{ fontSize: '0.68rem', color: '#64748B', fontWeight: 600 }}>Presets:</span>
+                      <div style={{ display: 'flex', gap: '4px' }}>
+                        {PRESET_AVATARS.slice(0, 5).map((preset, idx) => (
+                          <img
+                            key={idx}
+                            src={preset}
+                            alt="Preset avatar"
+                            onClick={() => setEditDossierForm((prev) => ({ ...prev, avatarUrl: preset }))}
+                            style={{
+                              width: '22px',
+                              height: '22px',
+                              borderRadius: '6px',
+                              objectFit: 'cover',
+                              cursor: 'pointer',
+                              border: editDossierForm.avatarUrl === preset ? '2px solid #0284C7' : '1px solid #CBD5E1',
+                              transition: 'transform 0.1s ease',
+                            }}
+                            title="Click to select this photo"
+                          />
+                        ))}
+                      </div>
+                    </div>
                   </div>
                 ) : (
                   <>
@@ -2759,7 +2956,7 @@ export default function EmployeesPage() {
                           fontFamily: 'monospace',
                         }}
                       >
-                        {selectedProfileCardEmp.employeeCode}
+                        {selectedProfileCardEmp.userId || selectedProfileCardEmp.employeeCode}
                       </span>
                       <span
                         style={{
@@ -2802,20 +2999,30 @@ export default function EmployeesPage() {
                     >
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                         <Phone size={13} style={{ color: '#0284C7' }} />
-                        <a href={`tel:${selectedProfileCardEmp.phone}`} style={{ color: '#0F172A', fontWeight: 700, textDecoration: 'none' }}>
-                          {selectedProfileCardEmp.phone}
-                        </a>
+                        {selectedProfileCardEmp.phone ? (
+                          <a href={`tel:${selectedProfileCardEmp.phone}`} style={{ color: '#0F172A', fontWeight: 700, textDecoration: 'none' }}>
+                            {selectedProfileCardEmp.phone}
+                          </a>
+                        ) : (
+                          <span style={{ color: '#94A3B8', fontWeight: 500 }}>No phone</span>
+                        )}
                       </span>
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                         <Mail size={13} style={{ color: '#0284C7' }} />
-                        <a href={`mailto:${selectedProfileCardEmp.email}`} style={{ color: '#0F172A', fontWeight: 700, textDecoration: 'none' }}>
-                          {selectedProfileCardEmp.email}
-                        </a>
+                        {selectedProfileCardEmp.email ? (
+                          <a href={`mailto:${selectedProfileCardEmp.email}`} style={{ color: '#0F172A', fontWeight: 700, textDecoration: 'none' }}>
+                            {selectedProfileCardEmp.email}
+                          </a>
+                        ) : (
+                          <span style={{ color: '#94A3B8', fontWeight: 500 }}>No email</span>
+                        )}
                       </span>
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                        <MapPin size={13} style={{ color: '#0284C7' }} />
-                        {selectedProfileCardEmp.branch}
-                      </span>
+                      {selectedProfileCardEmp.branch && (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                          <MapPin size={13} style={{ color: '#0284C7' }} />
+                          {selectedProfileCardEmp.branch}
+                        </span>
+                      )}
                     </div>
                   </>
                 )}
@@ -2826,56 +3033,92 @@ export default function EmployeesPage() {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
               {/* Card 1: CRM Login Credentials */}
               <div style={{ padding: '12px 14px', borderRadius: '12px', background: '#FFFFFF', border: '1px solid #E2E8F0', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
                   <span style={{ fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', color: '#64748B', letterSpacing: '0.04em' }}>
                     CRM Login Credentials
                   </span>
-                  <span style={{ fontSize: '0.68rem', fontWeight: 700, color: '#16A34A', background: '#F0FDF4', padding: '2px 6px', borderRadius: '4px' }}>
-                    Active
-                  </span>
+                  {selectedProfileCardEmp.isPasswordSet ? (
+                    <span style={{ fontSize: '0.68rem', fontWeight: 700, color: '#16A34A', background: '#F0FDF4', padding: '2px 6px', borderRadius: '4px' }}>
+                      Permanent Active ✓
+                    </span>
+                  ) : (
+                    <span style={{ fontSize: '0.68rem', fontWeight: 700, color: '#D97706', background: '#FEF3C7', padding: '2px 6px', borderRadius: '4px' }}>
+                      Password Pending
+                    </span>
+                  )}
                 </div>
 
                 {isEditingDossier ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '0.72rem', color: '#64748B' }}>Password</label>
+                    <label style={{ fontSize: '0.72rem', color: '#64748B', fontWeight: 700 }}>User ID</label>
                     <input
                       type="text"
                       className="form-input"
-                      style={{ height: '32px', fontSize: '0.82rem' }}
-                      value={editDossierForm.password || ''}
-                      onChange={(e) => setEditDossierForm({ ...editDossierForm, password: e.target.value })}
-                      placeholder="Enter new CRM password"
+                      style={{ height: '32px', fontSize: '0.82rem', fontFamily: 'monospace', fontWeight: 700, color: '#0284C7' }}
+                      value={editDossierForm.userId || editDossierForm.employeeCode || ''}
+                      onChange={(e) => setEditDossierForm({ ...editDossierForm, userId: e.target.value.toLowerCase().replace(/\s+/g, ''), employeeCode: e.target.value.toLowerCase().replace(/\s+/g, '') })}
+                      placeholder="e.g. fsafa"
                     />
                   </div>
                 ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.82rem' }}>
-                      <span style={{ color: '#64748B' }}>ID:</span>
-                      <span style={{ fontFamily: 'monospace', fontWeight: 800, color: '#0284C7' }}>{selectedProfileCardEmp.employeeCode}</span>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.82rem' }}>
-                      <span style={{ color: '#64748B' }}>Pass:</span>
+                      <span style={{ color: '#64748B', fontWeight: 600 }}>User ID:</span>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <span style={{ fontFamily: 'monospace', fontWeight: 800, color: '#0F172A', letterSpacing: revealedPasswords[selectedProfileCardEmp.id] ? '0' : '0.12em' }}>
-                          {revealedPasswords[selectedProfileCardEmp.id] ? selectedProfileCardEmp.password : '••••••••'}
+                        <span style={{ fontFamily: 'monospace', fontWeight: 800, color: '#0284C7' }}>
+                          {selectedProfileCardEmp.userId || selectedProfileCardEmp.employeeCode}
                         </span>
                         <button
                           type="button"
-                          onClick={() => setRevealedPasswords((prev) => ({ ...prev, [selectedProfileCardEmp.id]: !prev[selectedProfileCardEmp.id] }))}
-                          style={{ background: 'none', border: 'none', color: '#64748B', cursor: 'pointer', padding: '2px' }}
-                          title={revealedPasswords[selectedProfileCardEmp.id] ? 'Hide' : 'Show'}
-                        >
-                          {revealedPasswords[selectedProfileCardEmp.id] ? <EyeOff size={13} /> : <Eye size={13} />}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleCopy(selectedProfileCardEmp.password, `pass-${selectedProfileCardEmp.id}`)}
+                          onClick={() => handleCopy(selectedProfileCardEmp.userId || selectedProfileCardEmp.employeeCode, `id-${selectedProfileCardEmp.id}`)}
                           style={{ background: 'none', border: 'none', color: '#0284C7', cursor: 'pointer', padding: '2px' }}
-                          title="Copy Password"
+                          title="Copy User ID"
                         >
-                          {copiedId === `pass-${selectedProfileCardEmp.id}` ? <Check size={13} style={{ color: '#10B981' }} /> : <Copy size={13} />}
+                          {copiedId === `id-${selectedProfileCardEmp.id}` ? <Check size={13} style={{ color: '#10B981' }} /> : <Copy size={13} />}
                         </button>
                       </div>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.82rem' }}>
+                      <span style={{ color: '#64748B', fontWeight: 600 }}>Password:</span>
+                      <span style={{ fontSize: '0.76rem', fontWeight: 700, color: selectedProfileCardEmp.isPasswordSet ? '#16A34A' : '#D97706' }}>
+                        {selectedProfileCardEmp.isPasswordSet ? '•••••••• (Encrypted in DB)' : 'Pending 1st Login'}
+                      </span>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '2px', paddingTop: '6px', borderTop: '1px dashed #E2E8F0' }}>
+                      <span style={{ fontSize: '0.7rem', color: '#94A3B8' }}>
+                        {selectedProfileCardEmp.isPasswordSet ? 'Set & verified in database' : 'Creates password at /emplogin'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const res = await resetEmployeePassword(selectedProfileCardEmp.id);
+                          if (res.success) {
+                            const updated = getEmployees().find((e) => e.id === selectedProfileCardEmp.id);
+                            setSelectedProfileCardEmp(updated || null);
+                            setEmployees(getEmployees());
+                            showToast(`Password reset. Staff can set a fresh permanent password at /emplogin.`);
+                          } else {
+                            triggerErrorPopup(res.error || 'Failed to reset employee password in database.', 'Reset Failed');
+                          }
+                        }}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          color: '#4F46E5',
+                          fontSize: '0.7rem',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          padding: 0,
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '3px',
+                        }}
+                        title="Reset password so employee can set a new permanent password on next login"
+                      >
+                        <RefreshCw size={10} /> Reset Password
+                      </button>
                     </div>
                   </div>
                 )}
@@ -2915,8 +3158,15 @@ export default function EmployeesPage() {
                     <div style={{ fontWeight: 800, fontSize: '0.92rem', color: '#0F172A', marginTop: '4px' }}>
                       {selectedProfileCardEmp.designation}
                     </div>
-                    <div style={{ fontSize: '0.78rem', color: '#16A34A', fontWeight: 800, marginTop: '3px' }}>
-                      {selectedProfileCardEmp.salary} <span style={{ color: '#64748B', fontWeight: 500 }}>({selectedProfileCardEmp.salaryCategory || 'Annual CTC'})</span>
+                    <div style={{ fontSize: '0.78rem', color: selectedProfileCardEmp.salary ? '#16A34A' : '#94A3B8', fontWeight: 800, marginTop: '3px' }}>
+                      {selectedProfileCardEmp.salary ? (
+                        <>
+                          {selectedProfileCardEmp.salary}{' '}
+                          <span style={{ color: '#64748B', fontWeight: 500 }}>({selectedProfileCardEmp.salaryCategory || 'Annual CTC'})</span>
+                        </>
+                      ) : (
+                        'Salary Not Set'
+                      )}
                     </div>
                     <div style={{ fontSize: '0.72rem', color: '#94A3B8', marginTop: '2px' }}>
                       Joined: {selectedProfileCardEmp.joiningDate}
@@ -2936,35 +3186,46 @@ export default function EmployeesPage() {
                     onClick={() => setSelectedForLeave(selectedProfileCardEmp)}
                     style={{ background: 'none', border: 'none', color: '#0284C7', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer', padding: 0 }}
                   >
-                    Leave Logs ({selectedProfileCardEmp.leaveHistory.length}) &rarr;
+                    Leave Logs ({selectedProfileCardEmp.leaveHistory?.length || 0}) &rarr;
                   </button>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px', textAlign: 'center', marginTop: '4px' }}>
-                  <div style={{ background: '#F8FAFC', padding: '6px 4px', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
-                    <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#64748B' }}>CASUAL</div>
-                    <div style={{ fontSize: '1.05rem', fontWeight: 900, color: '#0F172A' }}>
-                      {selectedProfileCardEmp.leaveBalance.casual.total - selectedProfileCardEmp.leaveBalance.casual.used}
-                    </div>
-                    <div style={{ fontSize: '0.62rem', color: '#94A3B8' }}>of {selectedProfileCardEmp.leaveBalance.casual.total} left</div>
-                  </div>
+                {(() => {
+                  const casualTot = selectedProfileCardEmp.leaveBalance?.casual?.total || 0;
+                  const casualUsed = selectedProfileCardEmp.leaveBalance?.casual?.used || 0;
+                  const sickTot = selectedProfileCardEmp.leaveBalance?.sick?.total || 0;
+                  const sickUsed = selectedProfileCardEmp.leaveBalance?.sick?.used || 0;
+                  const paidTot = selectedProfileCardEmp.leaveBalance?.paid?.total || 0;
+                  const paidUsed = selectedProfileCardEmp.leaveBalance?.paid?.used || 0;
 
-                  <div style={{ background: '#F8FAFC', padding: '6px 4px', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
-                    <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#64748B' }}>SICK</div>
-                    <div style={{ fontSize: '1.05rem', fontWeight: 900, color: '#0F172A' }}>
-                      {selectedProfileCardEmp.leaveBalance.sick.total - selectedProfileCardEmp.leaveBalance.sick.used}
-                    </div>
-                    <div style={{ fontSize: '0.62rem', color: '#94A3B8' }}>of {selectedProfileCardEmp.leaveBalance.sick.total} left</div>
-                  </div>
+                  return (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px', textAlign: 'center', marginTop: '4px' }}>
+                      <div style={{ background: '#F8FAFC', padding: '6px 4px', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
+                        <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#64748B' }}>CASUAL</div>
+                        <div style={{ fontSize: '1.05rem', fontWeight: 900, color: '#0F172A' }}>
+                          {Math.max(0, casualTot - casualUsed)}
+                        </div>
+                        <div style={{ fontSize: '0.62rem', color: '#94A3B8' }}>of {casualTot} left</div>
+                      </div>
 
-                  <div style={{ background: '#F8FAFC', padding: '6px 4px', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
-                    <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#64748B' }}>PAID</div>
-                    <div style={{ fontSize: '1.05rem', fontWeight: 900, color: '#0F172A' }}>
-                      {selectedProfileCardEmp.leaveBalance.paid.total - selectedProfileCardEmp.leaveBalance.paid.used}
+                      <div style={{ background: '#F8FAFC', padding: '6px 4px', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
+                        <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#64748B' }}>SICK</div>
+                        <div style={{ fontSize: '1.05rem', fontWeight: 900, color: '#0F172A' }}>
+                          {Math.max(0, sickTot - sickUsed)}
+                        </div>
+                        <div style={{ fontSize: '0.62rem', color: '#94A3B8' }}>of {sickTot} left</div>
+                      </div>
+
+                      <div style={{ background: '#F8FAFC', padding: '6px 4px', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
+                        <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#64748B' }}>PAID</div>
+                        <div style={{ fontSize: '1.05rem', fontWeight: 900, color: '#0F172A' }}>
+                          {Math.max(0, paidTot - paidUsed)}
+                        </div>
+                        <div style={{ fontSize: '0.62rem', color: '#94A3B8' }}>of {paidTot} left</div>
+                      </div>
                     </div>
-                    <div style={{ fontSize: '0.62rem', color: '#94A3B8' }}>of {selectedProfileCardEmp.leaveBalance.paid.total} left</div>
-                  </div>
-                </div>
+                  );
+                })()}
               </div>
 
               {/* Card 4: Authorized CRM Sections */}
@@ -3035,6 +3296,9 @@ export default function EmployeesPage() {
           </div>
         </Modal>
       )}
+
+      {/* Global Error Pop-up Modal */}
+      <ErrorPopup listenGlobal={true} />
     </div>
   );
 }

@@ -72,7 +72,7 @@ export const UpdateTenantSettingsSchema = z.object({
   name: z.string().min(2).optional(),
   primaryPhone: z.string().optional(),
   primaryEmail: z.string().email().optional(),
-  settings: z.record(z.any()).optional(),
+  settings: z.record(z.string(), z.any()).optional(),
 });
 export type UpdateTenantSettingsInput = z.infer<typeof UpdateTenantSettingsSchema>;
 
@@ -86,7 +86,7 @@ export const CreateBranchSchema = z.object({
     state: z.string().optional(),
     pincode: z.string().optional(),
     country: z.string().default('India'),
-  }).default({}),
+  }).default({ country: 'India' }),
   phone: z.string().optional(),
   email: z.string().email().optional(),
   timezone: z.string().default('Asia/Kolkata'),
@@ -107,12 +107,12 @@ export const CreateCustomerSchema = z.object({
   aadhaarNumber: z.string().optional(),
   companyName: z.string().optional(),
   gstin: z.string().optional(),
-  address: z.record(z.any()).default({}),
+  address: z.record(z.string(), z.any()).default({}),
   consent: z.object({
     whatsapp: z.boolean().default(true),
     sms: z.boolean().default(true),
     email: z.boolean().default(true),
-  }).default({}),
+  }).default({ whatsapp: true, sms: true, email: true }),
 });
 export type CreateCustomerInput = z.infer<typeof CreateCustomerSchema>;
 
@@ -181,7 +181,7 @@ export const CreateActivitySchema = z.object({
   notes: z.string().optional(),
   occurredAt: z.string().optional(),
   dueDate: z.string().optional(),
-  metadata: z.record(z.any()).default({}),
+  metadata: z.record(z.string(), z.any()).default({}),
 });
 export type CreateActivityInput = z.infer<typeof CreateActivitySchema>;
 
@@ -381,7 +381,7 @@ export type DocumentUploadMetadataInput = z.infer<typeof DocumentUploadMetadataS
 export const EmployeeCreateSchema = z.object({
   id: z.string().optional(),
   fullName: z.string().min(2, 'Full name must be at least 2 characters'),
-  email: z.string().email('Invalid email address'),
+  email: z.string().email('Invalid email address').optional().or(z.literal('')),
   phone: z.string().optional(),
   role: z.enum([
     'tenant_admin',

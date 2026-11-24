@@ -1571,7 +1571,7 @@ export default function LeadsPage() {
               {/* Privacy & Compliance Notice */}
               <div className="inspo-footer-compliance" style={{ margin: '8px 0 0 0' }}>
                 <ShieldCheck size={14} style={{ color: '#16A34A' }} />
-                <span>© 2026 UNAI CRM · All data is encrypted per our Enterprise Security Policy</span>
+                <span>© 2026 Dealership CRM · All data is encrypted per our Enterprise Security Policy</span>
               </div>
             </form>
           </Modal>

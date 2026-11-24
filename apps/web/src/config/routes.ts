@@ -5,6 +5,7 @@ export const PUBLIC_PAGE_PREFIXES = [
   '/auth',
   '/_next',
   '/api/auth',
+  '/api/employees/auth',
   '/unai-logo',
   '/favicon.ico',
 ] as const;

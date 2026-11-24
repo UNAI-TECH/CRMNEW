@@ -17,97 +17,94 @@ import {
   KeyRound,
   Sparkles,
   ArrowLeft,
-  BadgeCheck,
-  Briefcase,
+  Check,
+  X,
+  Shield,
 } from 'lucide-react';
 import {
-  verifyEmployeeLogin,
+  verifyEmployeeUserId,
   setEmployeePermanentPassword,
+  verifyEmployeeLogin,
+  validateStrongPassword,
   Employee,
 } from '@/lib/client/stores/employee-store';
-import { getCompanyProfile, DEFAULT_COMPANY_PROFILE, CompanyProfile } from '@/lib/client/stores/company-store';
+import {
+  getCompanyProfile,
+  saveCompanyProfile,
+  DEFAULT_COMPANY_PROFILE,
+  CompanyProfile,
+} from '@/lib/client/stores/company-store';
+import { ErrorPopup, triggerErrorPopup } from '@/components/ui/ErrorPopup';
 
 export default function EmployeeLoginPage() {
   const router = useRouter();
   const { loginUser } = useAuth();
 
-  const [company, setCompany] = useState<CompanyProfile>(DEFAULT_COMPANY_PROFILE);
+  const [company, setCompany] = useState<Partial<CompanyProfile> | null>(null);
+  const [tenantOptions, setTenantOptions] = useState<any[] | null>(null);
   const [isMounted, setIsMounted] = useState(false);
 
-  // Form states
-  const [employeeIdOrEmail, setEmployeeIdOrEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // Workflow states:
+  // 1. 'enter_user_id' -> User enters assigned User ID
+  // 2. 'create_permanent_password' -> First time login or after admin reset: create permanent strong password
+  // 3. 'enter_password' -> Returning employee: enter permanent password
+  // 4. 'success' -> Logged in and redirecting
+  const [workflowStep, setWorkflowStep] = useState<
+    'enter_user_id' | 'create_permanent_password' | 'enter_password' | 'success'
+  >('enter_user_id');
 
-  // Workflow states: 'login' | 'first_time_password_change' | 'success'
-  const [workflowStep, setWorkflowStep] = useState<'login' | 'first_time_password_change' | 'success'>('login');
+  // Input states
+  const [userIdInput, setUserIdInput] = useState('');
   const [activeEmployee, setActiveEmployee] = useState<Employee | null>(null);
 
-  // New password state for first-time login
+  // Password for returning employee
+  const [passwordInput, setPasswordInput] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+
+  // First-time password creation states
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+
+  // Status states
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [passwordError, setPasswordError] = useState<string | null>(null);
 
   useEffect(() => {
     setIsMounted(true);
-    setCompany(getCompanyProfile());
+    // Neutral branding on Step 1: We intentionally DO NOT preload previous company from localStorage!
 
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       const prefilledId = params.get('emp');
       if (prefilledId) {
-        setEmployeeIdOrEmail(prefilledId);
+        setUserIdInput(prefilledId);
       }
     }
+
+    // Global client and network error listeners to guarantee a pop-up on any error
+    const handleWindowError = (event: ErrorEvent) => {
+      triggerErrorPopup(
+        event.message || 'An unexpected client-side error occurred.',
+        'Login System Error',
+        event.error?.stack || `${event.filename}:${event.lineno}`
+      );
+    };
+    const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
+      const reason = event.reason;
+      const msg = typeof reason === 'string' ? reason : reason?.message || 'Authentication request failed.';
+      triggerErrorPopup(msg, 'Server / Database Error', reason?.stack);
+    };
+    window.addEventListener('error', handleWindowError);
+    window.addEventListener('unhandledrejection', handleUnhandledRejection);
+
+    return () => {
+      window.removeEventListener('error', handleWindowError);
+      window.removeEventListener('unhandledrejection', handleUnhandledRejection);
+    };
   }, []);
-
-  // Step 1: Handle initial Employee ID + Password submission
-  const handleLoginSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-
-    const inputId = employeeIdOrEmail.trim();
-    const inputPass = password;
-
-    if (!inputId) {
-      setError('Please enter your Employee ID or Corporate Email.');
-      return;
-    }
-    if (!inputPass) {
-      setError('Please enter your password.');
-      return;
-    }
-
-    setLoading(true);
-
-    setTimeout(() => {
-      const result = verifyEmployeeLogin(inputId, inputPass);
-
-      if (!result.success || !result.employee) {
-        setLoading(false);
-        setError(result.error || 'Invalid credentials. Please verify your Employee ID and password.');
-        return;
-      }
-
-      const emp = result.employee;
-      setActiveEmployee(emp);
-
-      // Check if employee needs to set their own password (First-Time Login)
-      if (result.requiresPasswordChange) {
-        setLoading(false);
-        setWorkflowStep('first_time_password_change');
-        setNewPassword('');
-        setConfirmPassword('');
-        setPasswordError(null);
-      } else {
-        // Returning employee: log in directly
-        completeLogin(emp);
-      }
-    }, 400);
-  };
 
   // Helper to map employee designation to system UserRole
   const resolveRole = (emp: Employee) => {
@@ -120,19 +117,28 @@ export default function EmployeeLoginPage() {
     return 'sales_executive' as const;
   };
 
-  // Complete session & route to employee page
+  // Complete session & route to employee workspace
   const completeLogin = (emp: Employee) => {
     const role = resolveRole(emp);
 
-    loginUser(emp.email || `${emp.employeeCode.toLowerCase()}@dealership.com`, emp.fullName, role, {
+    loginUser(emp.email || `${(emp.userId || emp.employeeCode).toLowerCase()}@dealership.com`, emp.fullName, role, {
       employeeId: emp.id,
-      employeeCode: emp.employeeCode,
+      employeeCode: emp.userId || emp.employeeCode,
       isAdmin: emp.isAdmin,
       avatarUrl: emp.avatarUrl,
       phone: emp.phone,
       accessControl: emp.accessControl,
       tenantId: emp.tenantId,
     });
+
+    // Save authentic dealership profile to localStorage for session persistence
+    if (company && (company.tradeName || company.legalName)) {
+      saveCompanyProfile({
+        ...DEFAULT_COMPANY_PROFILE,
+        ...company,
+        id: emp.tenantId || DEFAULT_COMPANY_PROFILE.id,
+      });
+    }
 
     setWorkflowStep('success');
     setLoading(false);
@@ -142,37 +148,149 @@ export default function EmployeeLoginPage() {
     }, 1200);
   };
 
-  // Step 2: Handle First-Time Password Creation
-  const handleCreateOwnPasswordSubmit = (e: React.FormEvent) => {
+  // Select dealership when multiple companies match a generic User ID
+  const handleSelectTenant = async (option: any) => {
+    setLoading(true);
+    setTenantOptions(null);
+    const cleanId = userIdInput.trim().toLowerCase().replace(/\s+/g, '');
+
+    const result = await verifyEmployeeUserId(cleanId, option.tenantId);
+    if (!result.success || !result.employee) {
+      setLoading(false);
+      const errMsg = result.error || 'Failed to select dealership.';
+      setError(errMsg);
+      triggerErrorPopup(errMsg, 'Dealership Selection Failed');
+      return;
+    }
+
+    const emp = result.employee;
+    setActiveEmployee(emp);
+    setCompany({
+      ...DEFAULT_COMPANY_PROFILE,
+      legalName: option.dealershipName || result.company?.name || 'Dealership Workspace',
+      tradeName: option.dealershipName || result.company?.name || 'Dealership Workspace',
+      logoUrl: option.logoUrl || result.company?.logoUrl || '',
+    });
+    setLoading(false);
+
+    if (result.isPasswordSet) {
+      setWorkflowStep('enter_password');
+      setPasswordInput('');
+    } else {
+      setWorkflowStep('create_permanent_password');
+      setNewPassword('');
+      setConfirmPassword('');
+      setPasswordError(null);
+    }
+  };
+
+  // STEP 1: Verify User ID in database
+  const handleVerifyUserIdSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setPasswordError(null);
+    setError(null);
+    setTenantOptions(null);
 
-    if (!activeEmployee) return;
-
-    if (newPassword.length < 6) {
-      setPasswordError('Password must be at least 6 characters long.');
-      return;
-    }
-
-    if (newPassword === password) {
-      setPasswordError('New password cannot be the same as your temporary password. Please choose a new secure password.');
-      return;
-    }
-
-    if (newPassword !== confirmPassword) {
-      setPasswordError('Passwords do not match. Please re-enter to confirm.');
+    const cleanId = userIdInput.trim().toLowerCase().replace(/\s+/g, '');
+    if (!cleanId) {
+      const msg = 'Please enter your assigned User ID before proceeding.';
+      setError(msg);
+      triggerErrorPopup(msg, 'User ID Required');
       return;
     }
 
     setLoading(true);
 
-    setTimeout(() => {
-      // Save permanent password and clear temporary flags
-      const success = setEmployeePermanentPassword(activeEmployee.id, newPassword);
+    try {
+      const result = await verifyEmployeeUserId(cleanId);
 
-      if (success) {
+      // Handle multiple matching dealerships across tenants
+      if (result.multipleTenants && result.options) {
+        setTenantOptions(result.options);
+        setLoading(false);
+        return;
+      }
+
+      if (!result.success || !result.employee) {
+        setLoading(false);
+        const errMsg = result.error || `User ID '${userIdInput.trim()}' was not found in the dealership database.`;
+        setError(errMsg);
+        triggerErrorPopup(errMsg, 'User ID Not Found');
+        return;
+      }
+
+      const emp = result.employee;
+      setActiveEmployee(emp);
+
+      // Dynamically load that employee's authentic dealership profile
+      if (result.company) {
+        setCompany({
+          ...DEFAULT_COMPANY_PROFILE,
+          legalName: result.company.name || result.company.dealershipName || 'Dealership Workspace',
+          tradeName: result.company.name || result.company.dealershipName || 'Dealership Workspace',
+          logoUrl: result.company.logoUrl || '',
+        });
+      }
+
+      setLoading(false);
+
+      if (result.isPasswordSet) {
+        // Staff already has a permanent password active
+        setWorkflowStep('enter_password');
+        setPasswordInput('');
+      } else {
+        // Staff needs to create their permanent password on 1st login or after reset
+        setWorkflowStep('create_permanent_password');
+        setNewPassword('');
+        setConfirmPassword('');
+        setPasswordError(null);
+      }
+    } catch (err: any) {
+      setLoading(false);
+      const errText = err?.message || 'Unable to connect to database. Please check your network connection.';
+      setError(errText);
+      triggerErrorPopup(errText, 'Database Connection Error');
+    }
+  };
+
+  // STEP 2A: First-Time Login - Create Permanent Password
+  const handleCreatePermanentPasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPasswordError(null);
+
+    if (!activeEmployee) return;
+
+    // Validate strong password criteria
+    const validation = validateStrongPassword(newPassword);
+    if (!validation.valid) {
+      setPasswordError(validation.errors[0]);
+      triggerErrorPopup(
+        validation.errors[0],
+        'Strong Password Requirement Not Met',
+        validation.errors.join('\n')
+      );
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      const mismatchMsg = 'The permanent password and confirm password do not match. Please re-enter your password to confirm.';
+      setPasswordError(mismatchMsg);
+      triggerErrorPopup(mismatchMsg, 'Password Confirmation Mismatch');
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      const result = await setEmployeePermanentPassword(
+        activeEmployee.userId || activeEmployee.id,
+        newPassword
+      );
+
+      if (result.success) {
         const updated = {
           ...activeEmployee,
+          password: newPassword,
+          isPasswordSet: true,
           mustChangePassword: false,
           isTemporaryPassword: false,
         };
@@ -180,12 +298,74 @@ export default function EmployeeLoginPage() {
         completeLogin(updated);
       } else {
         setLoading(false);
-        setPasswordError('Failed to save your new password. Please try again.');
+        const failMsg = result.error || 'Failed to save permanent password in database. Please try again.';
+        setPasswordError(failMsg);
+        triggerErrorPopup(failMsg, 'Database Save Failed');
       }
-    }, 450);
+    } catch (err: any) {
+      setLoading(false);
+      const errText = err?.message || 'Failed to save password due to an unexpected error.';
+      setPasswordError(errText);
+      triggerErrorPopup(errText, 'Password Save Error');
+    }
   };
 
-  const dealershipName = company.tradeName || company.legalName || 'UNAI Dealership Platform';
+  // STEP 2B: Returning Staff - Enter Permanent Password
+  const handlePasswordLoginSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+
+    if (!activeEmployee) return;
+    if (!passwordInput) {
+      const emptyMsg = 'Please enter your permanent password.';
+      setError(emptyMsg);
+      triggerErrorPopup(emptyMsg, 'Password Required');
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      const result = await verifyEmployeeLogin(
+        activeEmployee.userId || activeEmployee.employeeCode,
+        passwordInput
+      );
+
+      if (result.success && result.employee) {
+        completeLogin(result.employee);
+      } else if (result.requiresPasswordCreation) {
+        setLoading(false);
+        setWorkflowStep('create_permanent_password');
+        const setupMsg = 'No permanent password found for this account. Please create your permanent password to proceed.';
+        setPasswordError(setupMsg);
+        triggerErrorPopup(setupMsg, 'Permanent Password Required');
+      } else {
+        setLoading(false);
+        const incorrectMsg = result.error || 'Incorrect permanent password. Please verify and try again.';
+        setError(incorrectMsg);
+        triggerErrorPopup(incorrectMsg, 'Authentication Failed');
+      }
+    } catch (err: any) {
+      setLoading(false);
+      const errText = err?.message || 'Authentication error. Please check your connection and try again.';
+      setError(errText);
+      triggerErrorPopup(errText, 'Authentication Error');
+    }
+  };
+
+  // Live password validation checklist
+  const hasMinLength = newPassword.length >= 8;
+  const hasUpper = /[A-Z]/.test(newPassword);
+  const hasLower = /[a-z]/.test(newPassword);
+  const hasNumber = /[0-9]/.test(newPassword);
+  const hasSpecial = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?~`]/.test(newPassword);
+  const passwordsMatch = Boolean(confirmPassword && confirmPassword === newPassword);
+  const isPasswordValid = hasMinLength && hasUpper && hasLower && hasNumber && hasSpecial && passwordsMatch;
+
+  const dealershipName =
+    company && (company.tradeName || company.legalName)
+      ? company.tradeName || company.legalName
+      : 'Dealership Staff Portal';
 
   return (
     <div
@@ -267,7 +447,7 @@ export default function EmployeeLoginPage() {
       <div
         style={{
           width: '100%',
-          maxWidth: '480px',
+          maxWidth: '500px',
           backgroundColor: '#FFFFFF',
           borderRadius: '24px',
           border: '1px solid #E2E8F0',
@@ -299,28 +479,116 @@ export default function EmployeeLoginPage() {
               boxShadow: '0 8px 20px rgba(79, 70, 229, 0.28)',
             }}
           >
-            {company.logoUrl ? (
+            {workflowStep !== 'enter_user_id' && company?.logoUrl ? (
               <img src={company.logoUrl} alt="Logo" style={{ width: '100%', height: '100%', objectFit: 'contain', borderRadius: '16px' }} />
-            ) : (
+            ) : workflowStep !== 'enter_user_id' ? (
               <Building2 size={28} />
+            ) : (
+              <ShieldCheck size={28} />
             )}
           </div>
 
           <h1 style={{ fontSize: '1.28rem', fontWeight: 800, color: '#0F172A', margin: '0 0 4px 0' }}>
-            {dealershipName}
+            {workflowStep === 'enter_user_id'
+              ? 'Staff & Team Member Portal'
+              : dealershipName}
           </h1>
           <p style={{ fontSize: '0.84rem', color: '#64748B', margin: 0, fontWeight: 500 }}>
-            {workflowStep === 'first_time_password_change'
-              ? 'Security Setup • Create Your Personal Password'
-              : 'Staff & Team Member Login'}
+            {workflowStep === 'create_permanent_password'
+              ? 'First-Time Setup • Create Your Permanent Password'
+              : workflowStep === 'enter_password'
+              ? 'Welcome Back • Enter Your Permanent Password'
+              : 'Universal Staff Login • Enter your assigned User ID'}
           </p>
         </div>
 
         {/* Content Body */}
         <div style={{ padding: '28px' }}>
-          {/* STEP 1: LOGIN FORM */}
-          {workflowStep === 'login' && (
-            <form onSubmit={handleLoginSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
+          {/* ========================================================
+              STEP 1: ENTER USER ID OR SELECT DEALERSHIP
+              ======================================================== */}
+          {workflowStep === 'enter_user_id' && tenantOptions && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              <div style={{ fontSize: '0.86rem', color: '#334155', fontWeight: 600 }}>
+                Multiple dealerships found for <span style={{ fontFamily: 'monospace', color: '#4F46E5', fontWeight: 800 }}>{userIdInput}</span>. Select your dealership to continue:
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {tenantOptions.map((opt, i) => (
+                  <button
+                    key={opt.tenantId || i}
+                    type="button"
+                    onClick={() => handleSelectTenant(opt)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '12px',
+                      padding: '12px 14px',
+                      borderRadius: '12px',
+                      border: '1.5px solid #E2E8F0',
+                      backgroundColor: '#FFFFFF',
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                      transition: 'all 0.15s ease',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.borderColor = '#4F46E5';
+                      e.currentTarget.style.backgroundColor = '#F8FAFC';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.borderColor = '#E2E8F0';
+                      e.currentTarget.style.backgroundColor = '#FFFFFF';
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: '38px',
+                        height: '38px',
+                        borderRadius: '10px',
+                        backgroundColor: '#EEF2FF',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        color: '#4F46E5',
+                        flexShrink: 0,
+                      }}
+                    >
+                      {opt.logoUrl ? (
+                        <img src={opt.logoUrl} alt={opt.dealershipName} style={{ width: '100%', height: '100%', objectFit: 'contain', borderRadius: '10px' }} />
+                      ) : (
+                        <Building2 size={18} />
+                      )}
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#0F172A' }}>{opt.dealershipName}</div>
+                      <div style={{ fontSize: '0.74rem', color: '#64748B' }}>{opt.designation} • {opt.department}</div>
+                    </div>
+                    <ArrowRight size={15} style={{ color: '#94A3B8' }} />
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setTenantOptions(null);
+                  setUserIdInput('');
+                }}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#64748B',
+                  fontSize: '0.8rem',
+                  cursor: 'pointer',
+                  marginTop: '4px',
+                  textAlign: 'center',
+                }}
+              >
+                ← Try a different User ID
+              </button>
+            </div>
+          )}
+
+          {workflowStep === 'enter_user_id' && !tenantOptions && (
+            <form onSubmit={handleVerifyUserIdSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
               {error && (
                 <div
                   style={{
@@ -341,10 +609,10 @@ export default function EmployeeLoginPage() {
                 </div>
               )}
 
-              {/* Employee ID or Email Input */}
+              {/* User ID Input */}
               <div>
                 <label
-                  htmlFor="emp-login-identifier"
+                  htmlFor="emp-login-userid"
                   style={{
                     display: 'block',
                     fontSize: '0.84rem',
@@ -353,7 +621,7 @@ export default function EmployeeLoginPage() {
                     marginBottom: '6px',
                   }}
                 >
-                  Employee ID or Email <span style={{ color: '#EF4444' }}>*</span>
+                  User ID <span style={{ color: '#EF4444' }}>*</span>
                 </label>
                 <div style={{ position: 'relative' }}>
                   <User
@@ -367,12 +635,13 @@ export default function EmployeeLoginPage() {
                     }}
                   />
                   <input
-                    id="emp-login-identifier"
+                    id="emp-login-userid"
                     type="text"
-                    value={employeeIdOrEmail}
-                    onChange={(e) => setEmployeeIdOrEmail(e.target.value)}
-                    placeholder="e.g. EMP-001 or rahul@dealership.com"
+                    value={userIdInput}
+                    onChange={(e) => setUserIdInput(e.target.value)}
+                    placeholder="Enter assigned User ID (e.g. fsafa, rohit01)"
                     required
+                    autoFocus
                     style={{
                       width: '100%',
                       height: '46px',
@@ -381,6 +650,8 @@ export default function EmployeeLoginPage() {
                       border: '1.5px solid #CBD5E1',
                       backgroundColor: '#FFFFFF',
                       fontSize: '0.92rem',
+                      fontFamily: 'monospace',
+                      fontWeight: 700,
                       color: '#0F172A',
                       outline: 'none',
                       transition: 'border-color 0.15s ease',
@@ -388,70 +659,8 @@ export default function EmployeeLoginPage() {
                     }}
                   />
                 </div>
-                <div style={{ fontSize: '0.74rem', color: '#64748B', marginTop: '4px' }}>
-                  Enter the Employee ID provided by your administrator.
-                </div>
-              </div>
-
-              {/* Password Input */}
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                  <label htmlFor="emp-login-password" style={{ fontSize: '0.84rem', fontWeight: 700, color: '#1E293B' }}>
-                    Password <span style={{ color: '#EF4444' }}>*</span>
-                  </label>
-                  <span style={{ fontSize: '0.72rem', color: '#4F46E5', fontWeight: 600 }}>
-                    Temporary or Permanent
-                  </span>
-                </div>
-                <div style={{ position: 'relative' }}>
-                  <Lock
-                    size={17}
-                    style={{
-                      position: 'absolute',
-                      left: '14px',
-                      top: '50%',
-                      transform: 'translateY(-50%)',
-                      color: '#94A3B8',
-                    }}
-                  />
-                  <input
-                    id="emp-login-password"
-                    type={showPassword ? 'text' : 'password'}
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Enter password given by admin"
-                    required
-                    style={{
-                      width: '100%',
-                      height: '46px',
-                      padding: '0 42px 0 42px',
-                      borderRadius: '12px',
-                      border: '1.5px solid #CBD5E1',
-                      backgroundColor: '#FFFFFF',
-                      fontSize: '0.92rem',
-                      color: '#0F172A',
-                      outline: 'none',
-                      transition: 'border-color 0.15s ease',
-                      boxSizing: 'border-box',
-                    }}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    style={{
-                      position: 'absolute',
-                      right: '12px',
-                      top: '50%',
-                      transform: 'translateY(-50%)',
-                      background: 'none',
-                      border: 'none',
-                      color: '#94A3B8',
-                      cursor: 'pointer',
-                      padding: '4px',
-                    }}
-                  >
-                    {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
-                  </button>
+                <div style={{ fontSize: '0.74rem', color: '#64748B', marginTop: '6px' }}>
+                  Enter the unique User ID assigned by your dealership administrator.
                 </div>
               </div>
 
@@ -475,14 +684,14 @@ export default function EmployeeLoginPage() {
                   gap: '8px',
                   boxShadow: '0 4px 14px rgba(79, 70, 229, 0.3)',
                   transition: 'all 0.15s ease',
-                  marginTop: '8px',
+                  marginTop: '6px',
                 }}
               >
                 {loading ? (
-                  <span>Verifying credentials...</span>
+                  <span>Verifying User ID in database...</span>
                 ) : (
                   <>
-                    <span>Sign In to Employee Portal</span>
+                    <span>Continue</span>
                     <ArrowRight size={17} />
                   </>
                 )}
@@ -490,16 +699,18 @@ export default function EmployeeLoginPage() {
             </form>
           )}
 
-          {/* STEP 2: FIRST TIME LOGIN - CREATE OWN PERMANENT PASSWORD */}
-          {workflowStep === 'first_time_password_change' && activeEmployee && (
-            <form onSubmit={handleCreateOwnPasswordSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
-              {/* Employee Welcome Banner */}
+          {/* ========================================================
+              STEP 2A: FIRST-TIME LOGIN - CREATE PERMANENT PASSWORD
+              ======================================================== */}
+          {workflowStep === 'create_permanent_password' && activeEmployee && (
+            <form onSubmit={handleCreatePermanentPasswordSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              {/* Employee Verified Banner */}
               <div
                 style={{
                   display: 'flex',
                   alignItems: 'center',
                   gap: '12px',
-                  padding: '14px',
+                  padding: '12px 14px',
                   borderRadius: '14px',
                   backgroundColor: '#EEF2FF',
                   border: '1.5px solid #C7D2FE',
@@ -523,11 +734,11 @@ export default function EmployeeLoginPage() {
                   {activeEmployee.fullName.charAt(0).toUpperCase()}
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: '0.92rem', fontWeight: 800, color: '#1E1B4B' }}>
+                  <div style={{ fontSize: '0.94rem', fontWeight: 800, color: '#1E1B4B' }}>
                     Welcome, {activeEmployee.fullName}!
                   </div>
                   <div style={{ fontSize: '0.74rem', color: '#4338CA', fontWeight: 600 }}>
-                    ID: {activeEmployee.employeeCode} • {activeEmployee.designation}
+                    User ID: <strong>{activeEmployee.userId || activeEmployee.employeeCode}</strong> • {activeEmployee.designation}
                   </div>
                 </div>
                 <span
@@ -540,7 +751,7 @@ export default function EmployeeLoginPage() {
                     fontWeight: 700,
                   }}
                 >
-                  1st Time Login
+                  1st Time Setup
                 </span>
               </div>
 
@@ -561,9 +772,9 @@ export default function EmployeeLoginPage() {
               >
                 <KeyRound size={16} style={{ flexShrink: 0, marginTop: '2px', color: '#D97706' }} />
                 <div>
-                  <strong>Admin Temporary Password Verified.</strong>
+                  <strong>User ID Verified in Database.</strong>
                   <br />
-                  For your privacy and security, please create your own personal password to access your CRM employee account.
+                  Please create your permanent password below. This password will be securely saved in the database for all your future logins.
                 </div>
               </div>
 
@@ -589,7 +800,7 @@ export default function EmployeeLoginPage() {
               {/* New Password Input */}
               <div>
                 <label htmlFor="emp-new-password" style={{ display: 'block', fontSize: '0.84rem', fontWeight: 700, color: '#1E293B', marginBottom: '6px' }}>
-                  Create New Password <span style={{ color: '#EF4444' }}>*</span>
+                  Create Permanent Password <span style={{ color: '#EF4444' }}>*</span>
                 </label>
                 <div style={{ position: 'relative' }}>
                   <Lock
@@ -607,7 +818,7 @@ export default function EmployeeLoginPage() {
                     type={showNewPassword ? 'text' : 'password'}
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
-                    placeholder="Enter your new secret password"
+                    placeholder="Create a strong password"
                     required
                     style={{
                       width: '100%',
@@ -640,15 +851,12 @@ export default function EmployeeLoginPage() {
                     {showNewPassword ? <EyeOff size={17} /> : <Eye size={17} />}
                   </button>
                 </div>
-                <div style={{ fontSize: '0.72rem', color: '#64748B', marginTop: '4px' }}>
-                  Minimum 6 characters with letters and numbers.
-                </div>
               </div>
 
               {/* Confirm Password Input */}
               <div>
                 <label htmlFor="emp-confirm-password" style={{ display: 'block', fontSize: '0.84rem', fontWeight: 700, color: '#1E293B', marginBottom: '6px' }}>
-                  Confirm New Password <span style={{ color: '#EF4444' }}>*</span>
+                  Confirm Permanent Password <span style={{ color: '#EF4444' }}>*</span>
                 </label>
                 <div style={{ position: 'relative' }}>
                   <Lock
@@ -663,15 +871,15 @@ export default function EmployeeLoginPage() {
                   />
                   <input
                     id="emp-confirm-password"
-                    type={showNewPassword ? 'text' : 'password'}
+                    type={showConfirmPassword ? 'text' : 'password'}
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
-                    placeholder="Re-type new password"
+                    placeholder="Re-enter permanent password"
                     required
                     style={{
                       width: '100%',
                       height: '46px',
-                      padding: '0 14px 0 42px',
+                      padding: '0 42px 0 42px',
                       borderRadius: '12px',
                       border:
                         confirmPassword && confirmPassword === newPassword
@@ -686,18 +894,72 @@ export default function EmployeeLoginPage() {
                       boxSizing: 'border-box',
                     }}
                   />
-                  {confirmPassword && confirmPassword === newPassword && (
-                    <CheckCircle2
-                      size={18}
-                      style={{
-                        position: 'absolute',
-                        right: '12px',
-                        top: '50%',
-                        transform: 'translateY(-50%)',
-                        color: '#16A34A',
-                      }}
-                    />
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                    style={{
+                      position: 'absolute',
+                      right: '12px',
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      background: 'none',
+                      border: 'none',
+                      color: '#94A3B8',
+                      cursor: 'pointer',
+                      padding: '4px',
+                    }}
+                  >
+                    {showConfirmPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+                  </button>
+                </div>
+              </div>
+
+              {/* Password Strength Real-time Requirements Checklist */}
+              <div
+                style={{
+                  padding: '12px',
+                  backgroundColor: '#F8FAFC',
+                  borderRadius: '12px',
+                  border: '1px solid #E2E8F0',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '6px',
+                }}
+              >
+                <div style={{ fontSize: '0.72rem', fontWeight: 800, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '2px' }}>
+                  Strong Password Requirements
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.74rem', color: hasMinLength ? '#16A34A' : '#64748B' }}>
+                    {hasMinLength ? <Check size={13} style={{ color: '#16A34A' }} /> : <span style={{ width: '13px', height: '13px', borderRadius: '50%', border: '1px solid #CBD5E1', display: 'inline-block' }} />}
+                    <span>8+ characters</span>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.74rem', color: hasUpper ? '#16A34A' : '#64748B' }}>
+                    {hasUpper ? <Check size={13} style={{ color: '#16A34A' }} /> : <span style={{ width: '13px', height: '13px', borderRadius: '50%', border: '1px solid #CBD5E1', display: 'inline-block' }} />}
+                    <span>Uppercase (A-Z)</span>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.74rem', color: hasLower ? '#16A34A' : '#64748B' }}>
+                    {hasLower ? <Check size={13} style={{ color: '#16A34A' }} /> : <span style={{ width: '13px', height: '13px', borderRadius: '50%', border: '1px solid #CBD5E1', display: 'inline-block' }} />}
+                    <span>Lowercase (a-z)</span>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.74rem', color: hasNumber ? '#16A34A' : '#64748B' }}>
+                    {hasNumber ? <Check size={13} style={{ color: '#16A34A' }} /> : <span style={{ width: '13px', height: '13px', borderRadius: '50%', border: '1px solid #CBD5E1', display: 'inline-block' }} />}
+                    <span>Numeric digit (0-9)</span>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.74rem', color: hasSpecial ? '#16A34A' : '#64748B' }}>
+                    {hasSpecial ? <Check size={13} style={{ color: '#16A34A' }} /> : <span style={{ width: '13px', height: '13px', borderRadius: '50%', border: '1px solid #CBD5E1', display: 'inline-block' }} />}
+                    <span>Special character (!@#$)</span>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.74rem', color: passwordsMatch ? '#16A34A' : '#64748B' }}>
+                    {passwordsMatch ? <Check size={13} style={{ color: '#16A34A' }} /> : <span style={{ width: '13px', height: '13px', borderRadius: '50%', border: '1px solid #CBD5E1', display: 'inline-block' }} />}
+                    <span>Passwords match</span>
+                  </div>
                 </div>
               </div>
 
@@ -705,7 +967,14 @@ export default function EmployeeLoginPage() {
               <div style={{ display: 'flex', gap: '10px', marginTop: '6px' }}>
                 <button
                   type="button"
-                  onClick={() => setWorkflowStep('login')}
+                  onClick={() => {
+                    setWorkflowStep('enter_user_id');
+                    setActiveEmployee(null);
+                    setCompany(null);
+                    setTenantOptions(null);
+                    setError(null);
+                    setPasswordError(null);
+                  }}
                   style={{
                     flex: '1',
                     height: '48px',
@@ -718,7 +987,199 @@ export default function EmployeeLoginPage() {
                     cursor: 'pointer',
                   }}
                 >
-                  Back
+                  Change User ID
+                </button>
+                <button
+                  type="submit"
+                  disabled={loading || !isPasswordValid}
+                  style={{
+                    flex: '2',
+                    height: '48px',
+                    borderRadius: '12px',
+                    backgroundColor: isPasswordValid ? '#16A34A' : '#94A3B8',
+                    color: '#FFFFFF',
+                    fontSize: '0.92rem',
+                    fontWeight: 700,
+                    border: 'none',
+                    cursor: loading || !isPasswordValid ? 'not-allowed' : 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '8px',
+                    boxShadow: isPasswordValid ? '0 4px 14px rgba(22, 163, 74, 0.3)' : 'none',
+                    transition: 'all 0.15s ease',
+                  }}
+                >
+                  {loading ? (
+                    <span>Saving to Database...</span>
+                  ) : (
+                    <>
+                      <Sparkles size={16} />
+                      <span>Save & Sign In</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* ========================================================
+              STEP 2B: RETURNING STAFF - ENTER PERMANENT PASSWORD
+              ======================================================== */}
+          {workflowStep === 'enter_password' && activeEmployee && (
+            <form onSubmit={handlePasswordLoginSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
+              {/* Employee Card */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '12px',
+                  padding: '12px 14px',
+                  borderRadius: '14px',
+                  backgroundColor: '#F0FDF4',
+                  border: '1.5px solid #BBF7D0',
+                }}
+              >
+                <div
+                  style={{
+                    width: '42px',
+                    height: '42px',
+                    borderRadius: '12px',
+                    backgroundColor: '#16A34A',
+                    color: '#FFFFFF',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '1rem',
+                    fontWeight: 800,
+                    flexShrink: 0,
+                  }}
+                >
+                  {activeEmployee.fullName.charAt(0).toUpperCase()}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: '0.94rem', fontWeight: 800, color: '#14532D' }}>
+                    {activeEmployee.fullName}
+                  </div>
+                  <div style={{ fontSize: '0.74rem', color: '#166534', fontWeight: 600 }}>
+                    User ID: <strong>{activeEmployee.userId || activeEmployee.employeeCode}</strong> • {activeEmployee.designation}
+                  </div>
+                </div>
+                <span
+                  style={{
+                    fontSize: '0.7rem',
+                    padding: '4px 8px',
+                    borderRadius: '999px',
+                    backgroundColor: '#DCFCE7',
+                    color: '#15803D',
+                    fontWeight: 700,
+                  }}
+                >
+                  Permanent Active ✓
+                </span>
+              </div>
+
+              {error && (
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: '10px',
+                    padding: '12px 14px',
+                    backgroundColor: '#FEF2F2',
+                    border: '1px solid #FCA5A5',
+                    borderRadius: '12px',
+                    color: '#DC2626',
+                    fontSize: '0.84rem',
+                    lineHeight: '1.4',
+                  }}
+                >
+                  <AlertCircle size={18} style={{ flexShrink: 0, marginTop: '2px' }} />
+                  <div>{error}</div>
+                </div>
+              )}
+
+              {/* Permanent Password Input */}
+              <div>
+                <label htmlFor="emp-returning-password" style={{ display: 'block', fontSize: '0.84rem', fontWeight: 700, color: '#1E293B', marginBottom: '6px' }}>
+                  Permanent Password <span style={{ color: '#EF4444' }}>*</span>
+                </label>
+                <div style={{ position: 'relative' }}>
+                  <Lock
+                    size={17}
+                    style={{
+                      position: 'absolute',
+                      left: '14px',
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      color: '#94A3B8',
+                    }}
+                  />
+                  <input
+                    id="emp-returning-password"
+                    type={showPassword ? 'text' : 'password'}
+                    value={passwordInput}
+                    onChange={(e) => setPasswordInput(e.target.value)}
+                    placeholder="Enter your permanent password"
+                    required
+                    autoFocus
+                    style={{
+                      width: '100%',
+                      height: '46px',
+                      padding: '0 42px 0 42px',
+                      borderRadius: '12px',
+                      border: '1.5px solid #CBD5E1',
+                      backgroundColor: '#FFFFFF',
+                      fontSize: '0.92rem',
+                      color: '#0F172A',
+                      outline: 'none',
+                      boxSizing: 'border-box',
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    style={{
+                      position: 'absolute',
+                      right: '12px',
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      background: 'none',
+                      border: 'none',
+                      color: '#94A3B8',
+                      cursor: 'pointer',
+                      padding: '4px',
+                    }}
+                  >
+                    {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+                  </button>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div style={{ display: 'flex', gap: '10px', marginTop: '6px' }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setWorkflowStep('enter_user_id');
+                    setActiveEmployee(null);
+                    setCompany(null);
+                    setTenantOptions(null);
+                    setError(null);
+                  }}
+                  style={{
+                    flex: '1',
+                    height: '48px',
+                    borderRadius: '12px',
+                    backgroundColor: '#FFFFFF',
+                    border: '1px solid #CBD5E1',
+                    color: '#475569',
+                    fontSize: '0.88rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Different User ID
                 </button>
                 <button
                   type="submit"
@@ -729,7 +1190,7 @@ export default function EmployeeLoginPage() {
                     borderRadius: '12px',
                     backgroundColor: '#4F46E5',
                     color: '#FFFFFF',
-                    fontSize: '0.92rem',
+                    fontSize: '0.94rem',
                     fontWeight: 700,
                     border: 'none',
                     cursor: loading ? 'not-allowed' : 'pointer',
@@ -741,11 +1202,11 @@ export default function EmployeeLoginPage() {
                   }}
                 >
                   {loading ? (
-                    <span>Saving...</span>
+                    <span>Verifying...</span>
                   ) : (
                     <>
-                      <Sparkles size={16} />
-                      <span>Save & Enter CRM</span>
+                      <span>Sign In</span>
+                      <ArrowRight size={17} />
                     </>
                   )}
                 </button>
@@ -753,7 +1214,9 @@ export default function EmployeeLoginPage() {
             </form>
           )}
 
-          {/* STEP 3: SUCCESS SPLASH */}
+          {/* ========================================================
+              STEP 3: SUCCESS SPLASH
+              ======================================================== */}
           {workflowStep === 'success' && activeEmployee && (
             <div style={{ textAlign: 'center', padding: '24px 0' }}>
               <div
@@ -777,7 +1240,7 @@ export default function EmployeeLoginPage() {
                 Welcome to Dealership Workspace!
               </h2>
               <p style={{ fontSize: '0.86rem', color: '#64748B', margin: '0 0 16px 0' }}>
-                Your password has been saved. Opening employee page...
+                Authentication successful. Opening employee portal...
               </p>
 
               <div
@@ -809,10 +1272,13 @@ export default function EmployeeLoginPage() {
             color: '#64748B',
           }}
         >
-          <span>UNAI CRM Enterprise Edition</span>
+          <span>Dealership CRM Enterprise Edition</span>
           <span>Security 256-bit Encrypted</span>
         </div>
       </div>
+
+      {/* Global Error Pop-up Modal */}
+      <ErrorPopup listenGlobal={true} />
     </div>
   );
 }

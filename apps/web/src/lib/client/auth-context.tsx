@@ -28,6 +28,23 @@ export function saveUserSession(session: UserSession) {
   try {
     localStorage.setItem(SESSION_KEY, JSON.stringify(session));
     window.dispatchEvent(new CustomEvent('crm-session-changed', { detail: session }));
+
+    // Synchronize cookie for instant SSR rendering without flashing
+    const cookieData = {
+      id: session.employeeId || session.userId,
+      userId: session.employeeCode || session.userId,
+      employeeCode: session.employeeCode || session.userId,
+      fullName: session.fullName,
+      email: session.email,
+      role: session.role,
+      department: 'Sales',
+      designation: session.role === 'sales_executive' ? 'Sales Executive' : 'Staff Member',
+      branch: 'Main Showroom',
+      accessControl: session.accessControl,
+      avatarUrl: session.avatarUrl,
+      phone: session.phone,
+    };
+    document.cookie = `crm-employee-session=${encodeURIComponent(JSON.stringify(cookieData))}; path=/; max-age=604800; SameSite=Lax`;
   } catch (e) {
     console.error('Failed to save session:', e);
   }
@@ -47,6 +64,7 @@ export function clearUserSession() {
   if (typeof window === 'undefined') return;
   try {
     localStorage.removeItem(SESSION_KEY);
+    document.cookie = 'crm-employee-session=; path=/; max-age=0; SameSite=Lax';
     window.dispatchEvent(new CustomEvent('crm-session-changed', { detail: null }));
   } catch (e) {
     console.error('Failed to clear session:', e);
@@ -149,7 +167,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
 
     // Listen to Supabase Auth state changes to keep token and cookies in sync
-    const { data: authListener } = supabase.auth.onAuthStateChange((event, currentSession) => {
+    const { data: authListener } = supabase.auth.onAuthStateChange(async (event, currentSession) => {
       if (event === 'SIGNED_OUT') {
         clearUserSession();
         setIsLoggedIn(false);
@@ -158,9 +176,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           document.cookie = 'sb-access-token=; path=/; max-age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT';
           document.cookie = 'crm-role=; path=/; max-age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT';
           document.cookie = 'crm-tenant=; path=/; max-age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+          document.cookie = 'crm-session=; path=/; max-age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT';
         }
-      } else if (currentSession?.access_token && typeof document !== 'undefined') {
-        document.cookie = `sb-access-token=${currentSession.access_token}; path=/; max-age=604800; SameSite=Lax`;
+      } else if (currentSession?.access_token) {
+        if (typeof document !== 'undefined') {
+          document.cookie = `sb-access-token=${currentSession.access_token}; path=/; max-age=604800; SameSite=Lax`;
+        }
+        // Seamlessly refresh server HttpOnly cookies on token refresh or sign in
+        if (event === 'TOKEN_REFRESHED' || event === 'SIGNED_IN') {
+          try {
+            await fetch('/api/auth/session', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ accessToken: currentSession.access_token }),
+            });
+          } catch {}
+        }
       }
     });
 
