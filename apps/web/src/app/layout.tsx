@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { cookies } from 'next/headers';
+import Script from 'next/script';
 import '@/styles/globals.css';
 import { AuthProvider } from '@/lib/client/auth-context';
 import { Shell } from '@/components/layout/Shell';
@@ -353,7 +354,9 @@ export default async function RootLayout({
         />
 
         {/* Synchronous Session & Branding Cookie Injector (Eliminates SSR hydration flash) */}
-        <script
+        <Script
+          id="crm-sync-session-branding"
+          strategy="beforeInteractive"
           dangerouslySetInnerHTML={{
             __html: `
               (function() {
@@ -368,9 +371,9 @@ export default async function RootLayout({
                       fullName: sess.fullName,
                       email: sess.email,
                       role: sess.role,
-                      department: 'Sales',
-                      designation: sess.role === 'sales_executive' ? 'Sales Executive' : 'Staff Member',
-                      branch: 'Main Showroom',
+                      department: sess.department || 'Sales',
+                      designation: sess.role === 'sales_executive' ? 'Sales Executive' : (sess.designation || 'Staff Member'),
+                      branch: sess.branch || '',
                       accessControl: sess.accessControl,
                       avatarUrl: sess.avatarUrl,
                       phone: sess.phone
