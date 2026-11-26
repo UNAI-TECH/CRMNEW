@@ -609,6 +609,8 @@ export default function OnboardingPage() {
       saveCompanyProfile({ ...formData, isOnboarded: false }, { skipRemoteSync: true });
       setActiveStep(2);
       window.scrollTo({ top: 0, behavior: 'smooth' });
+    } else {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   };
 
@@ -617,6 +619,8 @@ export default function OnboardingPage() {
       saveCompanyProfile({ ...formData, isOnboarded: false }, { skipRemoteSync: true });
       setActiveStep(3);
       window.scrollTo({ top: 0, behavior: 'smooth' });
+    } else {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   };
 
@@ -624,6 +628,8 @@ export default function OnboardingPage() {
     if (validateStep3()) {
       saveCompanyProfile({ ...formData, isOnboarded: false }, { skipRemoteSync: true });
       setActiveStep(4);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } else {
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   };
@@ -635,9 +641,61 @@ export default function OnboardingPage() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  const handleStepNavClick = (targetStep: 1 | 2 | 3 | 4 | 5) => {
+    if (targetStep === activeStep) return;
+
+    // Allow jumping backward to inspect or edit an earlier step without blocking
+    if (targetStep < activeStep) {
+      setErrors({});
+      setActiveStep(targetStep);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
+    // Require every prerequisite step up to targetStep - 1 to pass mandatory validation
+    if (targetStep >= 2 && !validateStep1()) {
+      setActiveStep(1);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+    if (targetStep >= 3 && !validateStep2()) {
+      setActiveStep(2);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+    if (targetStep >= 4 && !validateStep3()) {
+      setActiveStep(3);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
+    if (activeStep === 4) {
+      saveModules(modulesList);
+    }
+    saveCompanyProfile({ ...formData, isOnboarded: false }, { skipRemoteSync: true });
+    setErrors({});
+    setActiveStep(targetStep);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
   // Form submission in Step 5: Save everything and route to login
   const handleFinalSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!validateStep1()) {
+      setActiveStep(1);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+    if (!validateStep2()) {
+      setActiveStep(2);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+    if (!validateStep3()) {
+      setActiveStep(3);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
     if (!validateStep5()) return;
 
     setIsSubmitting(true);
@@ -948,10 +1006,12 @@ export default function OnboardingPage() {
             <button
               key={step.num}
               type="button"
-              onClick={() => {
-                setActiveStep(step.num as any);
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-              }}
+              onClick={() => handleStepNavClick(step.num as 1 | 2 | 3 | 4 | 5)}
+              title={
+                step.num > activeStep
+                  ? `Complete mandatory fields in Step ${activeStep} before advancing`
+                  : step.label
+              }
               className={`onboarding-nav-pill ${isActive ? 'active' : ''}`}
               style={{
                 background: isActive
@@ -960,6 +1020,7 @@ export default function OnboardingPage() {
                   ? 'rgba(98, 83, 248, 0.08)'
                   : 'transparent',
                 color: isActive ? '#FFFFFF' : isDone ? '#6253F8' : '#5E6360',
+                opacity: step.num > activeStep ? 0.72 : 1,
                 boxShadow: isActive ? '0 8px 20px -4px rgba(98, 83, 248, 0.36)' : 'none',
                 cursor: 'pointer',
               }}

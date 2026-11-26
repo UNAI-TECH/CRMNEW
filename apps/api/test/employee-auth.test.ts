@@ -503,5 +503,36 @@ describe('Staff User ID Authentication & Strong Password Workflow', () => {
       expect(shouldSkipSyncResponse(200)).toBe(false);
     });
   });
+
+  describe('Onboarding Sequential Step Navigation Gate', () => {
+    const resolveTargetOnboardingStep = (
+      currentStep: number,
+      targetStep: number,
+      validSteps: { step1: boolean; step2: boolean; step3: boolean }
+    ): number => {
+      if (targetStep <= currentStep) return targetStep;
+      if (targetStep >= 2 && !validSteps.step1) return 1;
+      if (targetStep >= 3 && !validSteps.step2) return 2;
+      if (targetStep >= 4 && !validSteps.step3) return 3;
+      return targetStep;
+    };
+
+    it('blocks advancing from Step 1 to Steps 2-5 until Step 1 mandatory fields are complete', () => {
+      const invalidStep1 = { step1: false, step2: false, step3: false };
+      expect(resolveTargetOnboardingStep(1, 2, invalidStep1)).toBe(1);
+      expect(resolveTargetOnboardingStep(1, 3, invalidStep1)).toBe(1);
+      expect(resolveTargetOnboardingStep(1, 5, invalidStep1)).toBe(1);
+    });
+
+    it('stops at the earliest incomplete step when skipping ahead via step pills', () => {
+      const step1Only = { step1: true, step2: false, step3: false };
+      expect(resolveTargetOnboardingStep(1, 2, step1Only)).toBe(2);
+      expect(resolveTargetOnboardingStep(1, 3, step1Only)).toBe(2);
+      expect(resolveTargetOnboardingStep(2, 5, step1Only)).toBe(2);
+
+      // Going backward is always allowed
+      expect(resolveTargetOnboardingStep(3, 1, { step1: true, step2: true, step3: false })).toBe(1);
+    });
+  });
 });
 
