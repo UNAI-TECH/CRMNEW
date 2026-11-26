@@ -3,7 +3,7 @@ import EmployeePortalContent from './EmployeePortalContent';
 import type { Metadata } from 'next';
 
 export const metadata: Metadata = {
-  title: 'Dealership Staff Portal',
+  title: { absolute: 'UNAI CRM' },
   description: 'Personal staff workflow & assigned dealership tasks',
 };
 

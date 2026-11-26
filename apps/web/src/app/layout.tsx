@@ -7,8 +7,8 @@ import { Shell } from '@/components/layout/Shell';
 
 export const metadata: Metadata = {
   title: {
-    default: 'Dealership Staff Portal',
-    template: '%s | Dealership CRM',
+    default: 'UNAI CRM',
+    template: '%s | UNAI CRM',
   },
   description: 'Complete multi-tenant car dealership CRM, vehicle inventory, sales desk, finance, delivery, and after-sales platform.',
 };
