@@ -509,6 +509,9 @@ export async function fetchPipelineStages(): Promise<PipelineStageConfig[]> {
   if (typeof window === 'undefined') return cloneDefaultStages();
   try {
     const res = await fetch('/api/crm');
+    if (res.status === 401 || res.status === 403) {
+      return getPipelineStages();
+    }
     if (res.ok) {
       const json = await res.json();
       if (Array.isArray(json.pipeline_stages) && json.pipeline_stages.length > 0) {

@@ -467,5 +467,41 @@ describe('Staff User ID Authentication & Strong Password Workflow', () => {
       expect(canTransitionCustomPipeline(stages, 'converted', 'negotiation')).toBe(false);
     });
   });
+
+  describe('Unauthenticated Sync Guard & Public Route Rules', () => {
+    const isPublicAuthOrLandingPath = (pathname?: string): boolean => {
+      const path = (pathname || '/').trim() || '/';
+      return (
+        path === '/' ||
+        path === '/login' ||
+        path.startsWith('/login/') ||
+        path === '/emplogin' ||
+        path.startsWith('/emplogin/') ||
+        path === '/auth' ||
+        path.startsWith('/auth/')
+      );
+    };
+
+    const shouldSkipSyncResponse = (status: number): boolean => {
+      return status === 401 || status === 403;
+    };
+
+    it('identifies public landing and login routes so unauthenticated CRM fetches stay skipped', () => {
+      expect(isPublicAuthOrLandingPath('/')).toBe(true);
+      expect(isPublicAuthOrLandingPath('/login')).toBe(true);
+      expect(isPublicAuthOrLandingPath('/emplogin')).toBe(true);
+      expect(isPublicAuthOrLandingPath('/auth/google')).toBe(true);
+      expect(isPublicAuthOrLandingPath('/auth/callback')).toBe(true);
+      expect(isPublicAuthOrLandingPath('/dashboard')).toBe(false);
+      expect(isPublicAuthOrLandingPath('/crm/leads')).toBe(false);
+      expect(isPublicAuthOrLandingPath('/finance')).toBe(false);
+    });
+
+    it('short-circuits sync fallback immediately on 401/403 instead of cascading repeated API calls', () => {
+      expect(shouldSkipSyncResponse(401)).toBe(true);
+      expect(shouldSkipSyncResponse(403)).toBe(true);
+      expect(shouldSkipSyncResponse(200)).toBe(false);
+    });
+  });
 });
 

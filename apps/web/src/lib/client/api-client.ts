@@ -19,7 +19,59 @@ import type {
 } from '@crm/shared-types';
 import { PricingEngine } from '@crm/business-rules';
 import { supabase, isSupabaseConfigured } from './supabase.ts';
-import { getActiveTenantId, getScopedKey } from './tenant-context.ts';
+import { getActiveTenantId, getScopedKey, SESSION_KEY } from './tenant-context.ts';
+
+function isPublicAuthOrLandingPath(pathname?: string): boolean {
+  const path = (pathname || '/').trim() || '/';
+  return (
+    path === '/' ||
+    path === '/login' ||
+    path.startsWith('/login/') ||
+    path === '/emplogin' ||
+    path.startsWith('/emplogin/') ||
+    path === '/auth' ||
+    path.startsWith('/auth/')
+  );
+}
+
+function hasAuthenticatedClientSession(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    const rawSession = localStorage.getItem(SESSION_KEY);
+    if (rawSession) {
+      const parsed = JSON.parse(rawSession);
+      if (parsed?.isLoggedIn) return true;
+    }
+
+    const cookies = document.cookie || '';
+    if (
+      cookies.includes('crm-role=') ||
+      cookies.includes('crm-tenant=') ||
+      cookies.includes('crm-employee-session=') ||
+      cookies.includes('sb-access-token=') ||
+      cookies.includes('crm-token=') ||
+      cookies.includes('crm_access_token=')
+    ) {
+      return true;
+    }
+
+    const nowSec = Math.floor(Date.now() / 1000);
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith('sb-') && key.endsWith('-auth-token')) {
+        const raw = localStorage.getItem(key);
+        if (!raw) continue;
+        const parsed = JSON.parse(raw);
+        if (parsed?.access_token && (!parsed.expires_at || parsed.expires_at > nowSec)) {
+          return true;
+        }
+      }
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
 
 interface DataStore {
   tenant: any;
@@ -131,15 +183,33 @@ class DataService {
       // Listen for session switch or login/logout
       window.addEventListener('crm-session-changed', () => {
         this.loadFromStorage();
-        this.syncAllFromSupabase().catch(() => {});
+        if (hasAuthenticatedClientSession()) {
+          this.syncAllFromSupabase().catch(() => {});
+        }
       });
 
-      // Automatically trigger sync from Supabase database
+      // Automatically trigger background sync only for authenticated sessions on non-public pages
       setTimeout(() => {
-        this.syncAllFromSupabase().catch((err) =>
-          console.warn('[API] Background Supabase sync note:', err)
-        );
+        if (
+          !isPublicAuthOrLandingPath(window.location?.pathname) &&
+          hasAuthenticatedClientSession()
+        ) {
+          this.syncAllFromSupabase().catch((err) =>
+            console.warn('[API] Background Supabase sync note:', err)
+          );
+        }
       }, 100);
+    }
+  }
+
+  private async fetchCrmEndpoint(): Promise<Response | null> {
+    if (typeof window === 'undefined' || !hasAuthenticatedClientSession()) {
+      return null;
+    }
+    try {
+      return await fetch('/api/crm');
+    } catch {
+      return null;
     }
   }
 
@@ -293,10 +363,14 @@ class DataService {
   // ==========================================
   async syncAllFromSupabase(): Promise<void> {
     if (this.isSyncing) return;
+    if (typeof window !== 'undefined' && !hasAuthenticatedClientSession()) return;
     this.isSyncing = true;
     try {
       if (typeof window !== 'undefined') {
-        const res = await fetch('/api/crm');
+        const res = await this.fetchCrmEndpoint();
+        if (!res || res.status === 401 || res.status === 403) {
+          return;
+        }
         if (res.ok) {
           const json = await res.json();
           if (Array.isArray(json.customers)) this.data.customers = json.customers;
@@ -450,15 +524,13 @@ class DataService {
   }
 
   async fetchEmployees(): Promise<any[]> {
-    if (typeof window !== 'undefined') {
+    const res = await this.fetchCrmEndpoint();
+    if (res && res.ok) {
       try {
-        const res = await fetch('/api/crm');
-        if (res.ok) {
-          const json = await res.json();
-          if (Array.isArray(json.employees)) {
-            (this.data as any).employees = json.employees;
-            return json.employees;
-          }
+        const json = await res.json();
+        if (Array.isArray(json.employees)) {
+          (this.data as any).employees = json.employees;
+          return json.employees;
         }
       } catch (err) {
         console.warn('[API] fetchEmployees note:', err);
@@ -468,21 +540,22 @@ class DataService {
   }
 
   async fetchCustomers(): Promise<Customer[]> {
+    if (typeof window !== 'undefined' && !hasAuthenticatedClientSession()) {
+      return this.data.customers;
+    }
     const tenantId = getActiveTenantId();
     let remoteCustomers: any[] | null = null;
 
     // 1. Primary: fetch via authenticated server API route (/api/crm)
-    if (typeof window !== 'undefined') {
+    const res = await this.fetchCrmEndpoint();
+    if (res && res.ok) {
       try {
-        const res = await fetch('/api/crm');
-        if (res.ok) {
-          const json = await res.json();
-          if (Array.isArray(json.customers)) {
-            remoteCustomers = json.customers;
-          }
-          if (Array.isArray(json.employees)) {
-            (this.data as any).employees = json.employees;
-          }
+        const json = await res.json();
+        if (Array.isArray(json.customers)) {
+          remoteCustomers = json.customers;
+        }
+        if (Array.isArray(json.employees)) {
+          (this.data as any).employees = json.employees;
         }
       } catch (err) {
         console.warn('[API] /api/crm fetchCustomers note:', err);
@@ -903,39 +976,40 @@ class DataService {
   }
 
   async fetchLeads(): Promise<Lead[]> {
+    if (typeof window !== 'undefined' && !hasAuthenticatedClientSession()) {
+      return this.getLeads();
+    }
     const tenantId = getActiveTenantId();
     let data: any[] | null = null;
     let remoteCustomers: any[] = [];
 
     // 1. Primary: fetch via authenticated server API (/api/crm) which enforces tenant scope via verified cookie
-    if (typeof window !== 'undefined') {
+    const res = await this.fetchCrmEndpoint();
+    if (res && res.ok) {
       try {
-        const res = await fetch('/api/crm');
-        if (res.ok) {
-          const json = await res.json();
-          if (Array.isArray(json.leads)) data = json.leads;
-          if (Array.isArray(json.customers) && json.customers.length > 0) {
-            remoteCustomers = json.customers;
-            const existingCustIds = new Set(this.data.customers.map((c) => c.id));
-            for (const rc of json.customers) {
-              if (!existingCustIds.has(rc.id)) {
-                this.data.customers.push({
-                  id: rc.id,
-                  tenantId: rc.tenant_id || tenantId,
-                  branchId: rc.branch_id || `b_${tenantId}_main`,
-                  type: rc.type || 'individual',
-                  firstName: rc.first_name || 'Customer',
-                  lastName: rc.last_name || '',
-                  email: rc.email || undefined,
-                  phone: rc.phone || '',
-                  address: rc.address || { city: rc.city || '' },
-                  consent: rc.consent || { whatsapp: true, sms: true, email: true },
-                  version: rc.version || 1,
-                  createdAt: rc.created_at || new Date().toISOString(),
-                  updatedAt: rc.updated_at || new Date().toISOString(),
-                });
-                existingCustIds.add(rc.id);
-              }
+        const json = await res.json();
+        if (Array.isArray(json.leads)) data = json.leads;
+        if (Array.isArray(json.customers) && json.customers.length > 0) {
+          remoteCustomers = json.customers;
+          const existingCustIds = new Set(this.data.customers.map((c) => c.id));
+          for (const rc of json.customers) {
+            if (!existingCustIds.has(rc.id)) {
+              this.data.customers.push({
+                id: rc.id,
+                tenantId: rc.tenant_id || tenantId,
+                branchId: rc.branch_id || `b_${tenantId}_main`,
+                type: rc.type || 'individual',
+                firstName: rc.first_name || 'Customer',
+                lastName: rc.last_name || '',
+                email: rc.email || undefined,
+                phone: rc.phone || '',
+                address: rc.address || { city: rc.city || '' },
+                consent: rc.consent || { whatsapp: true, sms: true, email: true },
+                version: rc.version || 1,
+                createdAt: rc.created_at || new Date().toISOString(),
+                updatedAt: rc.updated_at || new Date().toISOString(),
+              });
+              existingCustIds.add(rc.id);
             }
           }
         }
@@ -1242,18 +1316,19 @@ class DataService {
   }
 
   async fetchVehicles(): Promise<Vehicle[]> {
+    if (typeof window !== 'undefined' && !hasAuthenticatedClientSession()) {
+      return this.data.vehicles;
+    }
     const tenantId = getActiveTenantId();
     let remoteRows: any[] | null = null;
 
     // 1. Primary: fetch via authenticated server API route (/api/crm) using service role
-    if (typeof window !== 'undefined') {
+    const res = await this.fetchCrmEndpoint();
+    if (res && res.ok) {
       try {
-        const res = await fetch('/api/crm');
-        if (res.ok) {
-          const json = await res.json();
-          if (Array.isArray(json.vehicles)) {
-            remoteRows = json.vehicles;
-          }
+        const json = await res.json();
+        if (Array.isArray(json.vehicles)) {
+          remoteRows = json.vehicles;
         }
       } catch (err) {
         console.warn('[API] /api/crm fetchVehicles note:', err);
@@ -1471,11 +1546,13 @@ class DataService {
   }
 
   async fetchAppointments(): Promise<Appointment[]> {
-    if (typeof window === 'undefined') return this.data.appointments;
+    if (typeof window === 'undefined' || !hasAuthenticatedClientSession()) {
+      return this.data.appointments;
+    }
 
     try {
-      const res = await fetch('/api/crm');
-      if (res.ok) {
+      const res = await this.fetchCrmEndpoint();
+      if (res && res.ok) {
         const json = await res.json();
         const remoteCustomers: any[] = Array.isArray(json.customers) ? json.customers : [];
         const remoteVehicles: any[] = Array.isArray(json.vehicles) ? json.vehicles : [];
@@ -2116,10 +2193,12 @@ class DataService {
   }
 
   async fetchQuotations(): Promise<Quotation[]> {
-    if (typeof window === 'undefined') return this.data.quotations || [];
+    if (typeof window === 'undefined' || !hasAuthenticatedClientSession()) {
+      return this.data.quotations || [];
+    }
     try {
-      const res = await fetch('/api/crm');
-      if (res.ok) {
+      const res = await this.fetchCrmEndpoint();
+      if (res && res.ok) {
         const json = await res.json();
         if (Array.isArray(json.quotations)) {
           const remoteQuotes = json.quotations.map((r: any) => {
@@ -2239,10 +2318,12 @@ class DataService {
   }
 
   async fetchInvoices(): Promise<any[]> {
-    if (typeof window === 'undefined') return this.getInvoices();
+    if (typeof window === 'undefined' || !hasAuthenticatedClientSession()) {
+      return this.getInvoices();
+    }
     try {
-      const res = await fetch('/api/crm');
-      if (res.ok) {
+      const res = await this.fetchCrmEndpoint();
+      if (res && res.ok) {
         const json = await res.json();
         if (Array.isArray(json.invoices)) {
           const remoteInvoices = json.invoices.map((r: any) => {
@@ -2295,10 +2376,12 @@ class DataService {
   }
 
   async fetchPayments(): Promise<Payment[]> {
-    if (typeof window === 'undefined') return this.data.payments || [];
+    if (typeof window === 'undefined' || !hasAuthenticatedClientSession()) {
+      return this.data.payments || [];
+    }
     try {
-      const res = await fetch('/api/crm');
-      if (res.ok) {
+      const res = await this.fetchCrmEndpoint();
+      if (res && res.ok) {
         const json = await res.json();
         if (Array.isArray(json.payments)) {
           const remotePayments: Payment[] = json.payments.map((r: any) => {
