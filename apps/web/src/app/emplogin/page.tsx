@@ -35,6 +35,7 @@ import {
   CompanyProfile,
 } from '@/lib/client/stores/company-store';
 import { ErrorPopup, triggerErrorPopup } from '@/components/ui/ErrorPopup';
+import { PwaInstallButton } from '@/components/pwa/PwaInstallControl';
 
 export default function EmployeeLoginPage() {
   const router = useRouter();
@@ -443,6 +444,7 @@ export default function EmployeeLoginPage() {
           >
             <ShieldCheck size={14} /> Staff & Employee Portal
           </span>
+          <PwaInstallButton variant="circle" />
         </div>
       </div>
 

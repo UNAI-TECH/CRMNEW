@@ -33,6 +33,7 @@ import {
   LayoutGrid,
 } from 'lucide-react';
 import { ProfileModal } from '@/components/layout/ProfileModal';
+import { PwaInstallButton } from '@/components/pwa/PwaInstallControl';
 import {
   getModules,
   fetchModules,
@@ -719,8 +720,10 @@ export function Shell({
 
   // Full-screen standalone layout for Welcome Landing (/), Onboarding, Login, Employee Login (/emplogin), and Auth (/auth/*)
   if (isStandaloneShellPath(pathname)) {
+    const showFloatingInstall = pathname === '/' || pathname === '/login' || pathname?.startsWith('/login/');
     return (
       <div className="app-shell" style={{ display: 'block', minHeight: '100vh', width: '100%' }}>
+        {showFloatingInstall && <PwaInstallButton variant="floating" />}
         {pathname === '/onboarding' ? (
           <div className="app-main" style={{ maxWidth: '1080px', margin: '0 auto', padding: '16px 16px 48px' }}>
             {children}
@@ -794,8 +797,10 @@ export function Shell({
               ))}
           </nav>
 
-          {/* Right: Working Notifications Center and Profile Avatar (Settings pill button removed per request) */}
+          {/* Right: PWA Install Icon, Working Notifications Center and Profile Avatar */}
           <div className="top-bar__right">
+            <PwaInstallButton variant="circle" />
+
             {/* Interactive Dealership Notifications Bell */}
             <div style={{ position: 'relative' }}>
               <button

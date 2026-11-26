@@ -1,9 +1,16 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { cookies } from 'next/headers';
 import Script from 'next/script';
 import '@/styles/globals.css';
 import { AuthProvider } from '@/lib/client/auth-context';
 import { Shell } from '@/components/layout/Shell';
+import { PwaProvider } from '@/components/pwa/PwaInstallControl';
+
+export const viewport: Viewport = {
+  themeColor: '#6253F8',
+  width: 'device-width',
+  initialScale: 1,
+};
 
 export const metadata: Metadata = {
   title: {
@@ -11,6 +18,22 @@ export const metadata: Metadata = {
     template: '%s | UNAI CRM',
   },
   description: 'Complete multi-tenant car dealership CRM, vehicle inventory, sales desk, finance, delivery, and after-sales platform.',
+  applicationName: 'UNAI CRM',
+  manifest: '/manifest.webmanifest',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'default',
+    title: 'UNAI CRM',
+  },
+  icons: {
+    icon: [
+      { url: '/icons/icon-192x192.png', sizes: '192x192', type: 'image/png' },
+      { url: '/icons/icon-512x512.png', sizes: '512x512', type: 'image/png' },
+    ],
+    apple: [
+      { url: '/icons/apple-touch-icon.png', sizes: '180x180', type: 'image/png' },
+    ],
+  },
 };
 
 export default async function RootLayout({
@@ -355,14 +378,16 @@ export default async function RootLayout({
 
       </head>
       <body>
-        <AuthProvider>
-          <Shell
-            initialSession={initialSession}
-            initialDealershipName={initialDealershipName}
-          >
-            {children}
-          </Shell>
-        </AuthProvider>
+        <PwaProvider>
+          <AuthProvider>
+            <Shell
+              initialSession={initialSession}
+              initialDealershipName={initialDealershipName}
+            >
+              {children}
+            </Shell>
+          </AuthProvider>
+        </PwaProvider>
         {/* Client-side Session & Branding Cookie Sync (afterInteractive avoids React script-tag warnings) */}
         <Script
           id="crm-sync-session-branding"

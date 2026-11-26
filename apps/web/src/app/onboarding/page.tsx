@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { WordFadeIn } from '@/components/ui/WordFadeIn';
+import { PwaInstallButton } from '@/components/pwa/PwaInstallControl';
 import { supabase } from '@/lib/client/supabase';
 import { useAuth } from '@/lib/client/auth-context';
 import { syncServerSession } from '@/lib/client/session-sync';
@@ -934,25 +935,28 @@ export default function OnboardingPage() {
           <span>{activeStep > 1 ? 'Back to Previous Step' : 'Back to Home'}</span>
         </button>
 
-        <button
-          type="button"
-          onClick={() => router.push('/login')}
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '6px',
-            padding: '8px 16px',
-            borderRadius: '999px',
-            backgroundColor: 'transparent',
-            color: '#6253F8',
-            border: 'none',
-            fontSize: '0.82rem',
-            fontWeight: 700,
-            cursor: 'pointer',
-          }}
-        >
-          <span>Already registered? Sign In</span>
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <button
+            type="button"
+            onClick={() => router.push('/login')}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '8px 16px',
+              borderRadius: '999px',
+              backgroundColor: 'transparent',
+              color: '#6253F8',
+              border: 'none',
+              fontSize: '0.82rem',
+              fontWeight: 700,
+              cursor: 'pointer',
+            }}
+          >
+            <span>Already registered? Sign In</span>
+          </button>
+          <PwaInstallButton variant="circle" />
+        </div>
       </div>
 
       {/* Hero Header without the pill badge */}
