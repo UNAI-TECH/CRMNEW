@@ -3571,31 +3571,132 @@ input.no-spinner {
    A4 PRINT STYLES FOR OFFICIAL WATERMARKED INVOICE
    ======================================================== */
 @media print {
+  @page {
+    size: A4 portrait;
+    margin: 0;
+  }
+
+  html,
+  body {
+    width: 210mm !important;
+    min-height: 296mm !important;
+    height: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #FFFFFF !important;
+    background-image: none !important;
+    overflow: visible !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
   body * {
     visibility: hidden;
   }
-  .print-invoice-sheet,
-  .print-invoice-sheet * {
-    visibility: visible;
-  }
-  .print-invoice-sheet {
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 100% !important;
-    max-width: 100% !important;
-    margin: 0 !important;
-    padding: 24px !important;
-    box-shadow: none !important;
-    border: none !important;
-    background: #FFFFFF !important;
-  }
-  .no-print {
+
+  body:has(.print-invoice-sheet) > *:not(.print-invoice-sheet):not(:has(.print-invoice-sheet)) {
     display: none !important;
   }
-  @page {
-    size: A4 portrait;
-    margin: 12mm;
+
+  body:has(.print-invoice-sheet) .no-print,
+  body:has(.print-invoice-sheet) .modal-header,
+  body:has(.print-invoice-sheet) .modal-footer {
+    display: none !important;
+  }
+
+  body:has(.print-invoice-sheet) .modal-overlay,
+  body:has(.print-invoice-sheet) .modal-content,
+  body:has(.print-invoice-sheet) .modal-body,
+  body:has(.print-invoice-sheet) *:has(> .print-invoice-sheet) {
+    position: static !important;
+    inset: auto !important;
+    display: block !important;
+    width: 100% !important;
+    max-width: none !important;
+    min-width: 0 !important;
+    height: auto !important;
+    max-height: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    gap: 0 !important;
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    background: transparent !important;
+    transform: none !important;
+    animation: none !important;
+    overflow: visible !important;
+  }
+
+  .print-invoice-sheet,
+  .print-invoice-sheet * {
+    visibility: visible !important;
+  }
+
+  .print-invoice-sheet {
+    position: relative !important;
+    left: auto !important;
+    top: auto !important;
+    width: 210mm !important;
+    max-width: 210mm !important;
+    min-height: 296mm !important;
+    margin: 0 !important;
+    padding: 14mm 16mm !important;
+    box-sizing: border-box !important;
+    box-shadow: none !important;
+    border: none !important;
+    border-radius: 0 !important;
+    background: #FFFFFF !important;
+    display: flex !important;
+    flex-direction: column !important;
+    justify-content: space-between !important;
+    overflow: visible !important;
+    page-break-inside: avoid;
+  }
+
+  .print-invoice-body {
+    flex: 1 1 auto !important;
+    display: flex !important;
+    flex-direction: column !important;
+  }
+
+  .print-invoice-sheet h1 {
+    font-size: 2.55rem !important;
+  }
+
+  .print-invoice-items-wrap {
+    flex: 1 1 auto !important;
+    display: flex !important;
+    flex-direction: column !important;
+    margin-top: 8px !important;
+    margin-bottom: 18px !important;
+  }
+
+  .print-invoice-items-wrap table th {
+    padding: 12px 8px !important;
+    font-size: 0.9rem !important;
+  }
+
+  .print-invoice-items-wrap table td {
+    padding: 12px 8px !important;
+    font-size: 0.9rem !important;
+  }
+
+  .print-invoice-summary-wrap {
+    margin-top: auto !important;
+    padding-top: 18px !important;
+    border-top: 1.5px solid #E2E8F0 !important;
+    margin-bottom: 18px !important;
+  }
+
+  .print-invoice-footer {
+    margin-top: 6px !important;
+    padding-top: 16px !important;
+    border-top: 1.5px solid #E2E8F0 !important;
+  }
+
+  .no-print {
+    display: none !important;
   }
 }
 

@@ -55,6 +55,37 @@ export interface Employee {
   mustChangePassword?: boolean;
 }
 
+const EXCLUDED_ASSIGNABLE_ROLE_KEYWORDS = ['finance', 'accountant', 'account', 'technician'];
+
+/**
+ * Returns true when an employee is eligible for customer/sales/showroom consultant assignment
+ * (excludes Finance, Accountant, Technician, and inactive staff).
+ */
+export function isAssignableEmployee(emp: {
+  role?: string;
+  designation?: string;
+  department?: string;
+  is_active?: boolean;
+  status?: string;
+}): boolean {
+  if (!emp) return false;
+  if (emp.is_active === false || emp.status === 'inactive') return false;
+  const descriptor = `${emp.role || ''} ${emp.designation || ''} ${emp.department || ''}`.toLowerCase();
+  return !EXCLUDED_ASSIGNABLE_ROLE_KEYWORDS.some((keyword) => descriptor.includes(keyword));
+}
+
+export function filterAssignableEmployees<
+  T extends {
+    role?: string;
+    designation?: string;
+    department?: string;
+    is_active?: boolean;
+    status?: string;
+  }
+>(employees: ReadonlyArray<T>): T[] {
+  return employees.filter(isAssignableEmployee);
+}
+
 import { supabase, isSupabaseConfigured } from '@/lib/client/supabase';
 import { getActiveTenantId, getScopedKey } from '@/lib/client/tenant-context';
 
@@ -584,7 +615,9 @@ export function updateEmployeePassword(id: string, newPassword: string): boolean
 
 export async function setEmployeePermanentPassword(
   idOrUserId: string,
-  newPassword: string
+  newPassword: string,
+  tenantId?: string,
+  employeeId?: string
 ): Promise<{ success: boolean; error?: string }> {
   const validation = validateStrongPassword(newPassword);
   if (!validation.valid) {
@@ -592,17 +625,16 @@ export async function setEmployeePermanentPassword(
   }
 
   const current = getEmployees();
-  const emp = current.find((e) => e.id === idOrUserId || (e.userId && e.userId.toLowerCase() === idOrUserId.toLowerCase()));
+  const emp = current.find(
+    (e) =>
+      (employeeId && e.id === employeeId) ||
+      e.id === idOrUserId ||
+      (e.userId && e.userId.toLowerCase() === idOrUserId.toLowerCase())
+  );
 
-  if (emp) {
-    emp.password = newPassword;
-    emp.isPasswordSet = true;
-    emp.mustChangePassword = false;
-    emp.isTemporaryPassword = false;
-    saveEmployees(current);
-  }
+  let isOfflineFallback = !isSupabaseConfigured();
 
-  // Sync to database via /api/employees/auth
+  // Sync to Supabase database FIRST when online/configured so DB is source of truth
   if (typeof window !== 'undefined') {
     try {
       const res = await fetch('/api/employees/auth', {
@@ -611,16 +643,45 @@ export async function setEmployeePermanentPassword(
         body: JSON.stringify({
           action: 'set-password',
           userId: emp?.userId || idOrUserId,
+          employeeId: employeeId || emp?.id,
+          tenantId: tenantId || emp?.tenantId,
           password: newPassword,
         }),
       });
+      const json = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const json = await res.json().catch(() => ({}));
-        if (json.error) return { success: false, error: json.error };
+        return {
+          success: false,
+          error: json.error || `Failed to save permanent password in database (HTTP ${res.status}).`,
+        };
       }
-    } catch (err) {
-      console.warn('[EmployeeStore] Failed to sync password to Supabase:', err);
+      if (!json.success) {
+        return {
+          success: false,
+          error: json.error || 'Failed to save permanent password in database.',
+        };
+      }
+      if (json.offlineMode) {
+        isOfflineFallback = true;
+      }
+    } catch (err: any) {
+      if (isSupabaseConfigured()) {
+        return {
+          success: false,
+          error: err?.message || 'Unable to connect to database to save permanent password.',
+        };
+      }
+      isOfflineFallback = true;
+      console.warn('[EmployeeStore] Offline mode, saving password locally:', err);
     }
+  }
+
+  if (emp) {
+    emp.password = isOfflineFallback ? newPassword : '';
+    emp.isPasswordSet = true;
+    emp.mustChangePassword = false;
+    emp.isTemporaryPassword = false;
+    saveEmployees(current);
   }
 
   return { success: true };
@@ -643,6 +704,8 @@ export async function resetEmployeePassword(id: string): Promise<{ success: bool
         body: JSON.stringify({
           action: 'reset-password',
           userId: emp.userId || emp.id,
+          employeeId: emp.id,
+          tenantId: emp.tenantId,
         }),
       });
       if (!res.ok) {
@@ -771,7 +834,8 @@ export async function verifyEmployeeUserId(
 
 export async function verifyEmployeeLogin(
   idOrEmail: string,
-  pass: string
+  pass: string,
+  tenantId?: string
 ): Promise<{ success: boolean; employee?: Employee; requiresPasswordCreation?: boolean; error?: string }> {
   const q = idOrEmail.trim().toLowerCase();
 
@@ -781,7 +845,7 @@ export async function verifyEmployeeLogin(
       const res = await fetch('/api/employees/auth', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'login', userId: q, password: pass }),
+        body: JSON.stringify({ action: 'login', userId: q, tenantId, password: pass }),
       });
       const json = await res.json().catch(() => ({}));
       if (res.ok && json.success) {

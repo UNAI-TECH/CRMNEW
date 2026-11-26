@@ -34,6 +34,7 @@ import {
 
 export default function TestDrivesPage() {
   const [testDrives, setTestDrives] = useState<TestDrive[]>([]);
+  const [vehicles, setVehicles] = useState<any[]>([]);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('All');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -62,13 +63,22 @@ export default function TestDrivesPage() {
 
   useEffect(() => {
     setTestDrives(getTestDrives());
+    setVehicles([...api.getVehicles()]);
     fetchTestDrives().then((data) => {
       if (Array.isArray(data)) setTestDrives([...data]);
     });
+    api.fetchVehicles().then((data) => {
+      if (Array.isArray(data)) setVehicles([...data]);
+    });
     initTestDrivesRealtime();
     const handleChanged = () => setTestDrives(getTestDrives());
+    const handleDataChanged = () => setVehicles([...api.getVehicles()]);
     window.addEventListener('crm-testdrives-changed', handleChanged);
-    return () => window.removeEventListener('crm-testdrives-changed', handleChanged);
+    window.addEventListener('crm-data-changed', handleDataChanged);
+    return () => {
+      window.removeEventListener('crm-testdrives-changed', handleChanged);
+      window.removeEventListener('crm-data-changed', handleDataChanged);
+    };
   }, []);
 
   const handleCreate = (e: React.FormEvent) => {
@@ -109,8 +119,8 @@ export default function TestDrivesPage() {
   };
 
   const inventoryCarOptions = useMemo(
-    () => buildInventoryCarOptions(api.getVehicles(), { includeYear: true }),
-    []
+    () => buildInventoryCarOptions(vehicles, { includeYear: true }),
+    [vehicles]
   );
 
   const filtered = useMemo(() => {

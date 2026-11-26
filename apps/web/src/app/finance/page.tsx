@@ -33,25 +33,29 @@ import { getActiveTenantId } from '@/lib/client/tenant-context';
 import { supabase, isSupabaseConfigured } from '@/lib/client/supabase';
 
 export default function FinancePage() {
-  const [payments, setPayments] = useState<Payment[]>(api.getPayments());
-  const [customers] = useState<Customer[]>(api.getCustomers());
+  const [payments, setPayments] = useState<Payment[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
   const [activeTab, setActiveTab] = useState<'payments' | 'invoices' | 'expenses'>('payments');
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [selectedReceipt, setSelectedReceipt] = useState<Payment | null>(null);
   const [selectedInvoice, setSelectedInvoice] = useState<any | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
 
-  const [invoices, setInvoices] = useState<any[]>(api.getInvoices());
+  const [invoices, setInvoices] = useState<any[]>([]);
   const [expenses, setExpenses] = useState<any[]>([]);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [toastType, setToastType] = useState<'success' | 'error'>('success');
 
   React.useEffect(() => {
     setPayments([...api.getPayments()]);
+    setCustomers([...api.getCustomers()]);
     setInvoices([...api.getInvoices()]);
 
     api.fetchPayments().then((p) => {
       if (Array.isArray(p)) setPayments([...p]);
+    });
+    api.fetchCustomers().then((c) => {
+      if (Array.isArray(c)) setCustomers([...c]);
     });
     api.fetchInvoices().then((i) => {
       if (Array.isArray(i)) setInvoices([...i]);
@@ -59,6 +63,7 @@ export default function FinancePage() {
 
     const handleDataChanged = () => {
       setPayments([...api.getPayments()]);
+      setCustomers([...api.getCustomers()]);
       setInvoices([...api.getInvoices()]);
     };
 
@@ -714,6 +719,7 @@ export default function FinancePage() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             {/* Quick Share bar */}
             <div
+              className="no-print"
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -794,6 +800,9 @@ export default function FinancePage() {
                     boxShadow: '0 6px 24px rgba(0,0,0,0.06)',
                     overflow: 'hidden',
                     minHeight: 'auto',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'space-between',
                     fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
                   }}
                 >
@@ -840,14 +849,14 @@ export default function FinancePage() {
                     )}
                   </div>
 
-                  <div style={{ position: 'relative', zIndex: 2 }}>
+                  <div className="print-invoice-body" style={{ position: 'relative', zIndex: 2, flex: 1, display: 'flex', flexDirection: 'column' }}>
                     {/* Header */}
                     <div
                       style={{
                         display: 'flex',
                         justifyContent: 'space-between',
                         alignItems: 'flex-start',
-                        marginBottom: '16px',
+                        marginBottom: '20px',
                       }}
                     >
                       <div>
@@ -920,7 +929,7 @@ export default function FinancePage() {
                     </div>
 
                     {/* Billed To */}
-                    <div style={{ marginBottom: '16px' }}>
+                    <div style={{ marginBottom: '20px' }}>
                       <div style={{ fontSize: '0.76rem', fontWeight: 800, color: textAccent, marginBottom: '3px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                         Invoice to:
                       </div>
@@ -933,33 +942,35 @@ export default function FinancePage() {
                     </div>
 
                     {/* Table */}
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem', marginBottom: '16px' }}>
-                      <thead>
-                        <tr style={{ borderBottom: '2px solid #E2E8F0' }}>
-                          <th style={{ padding: '8px 6px', textAlign: 'left', fontWeight: 800, color: '#0F172A', width: '45px' }}>No.</th>
-                          <th style={{ padding: '8px 6px', textAlign: 'left', fontWeight: 800, color: '#0F172A' }}>Product Description</th>
-                          <th style={{ padding: '8px 6px', textAlign: 'right', fontWeight: 800, color: '#0F172A', width: '100px' }}>Price</th>
-                          <th style={{ padding: '8px 6px', textAlign: 'center', fontWeight: 800, color: '#0F172A', width: '60px' }}>QTY</th>
-                          <th style={{ padding: '8px 6px', textAlign: 'right', fontWeight: 800, color: '#0F172A', width: '110px' }}>Total</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        <tr style={{ borderBottom: '1px solid #F1F5F9' }}>
-                          <td style={{ padding: '8px 6px', color: '#64748B', fontWeight: 600 }}>01</td>
-                          <td style={{ padding: '8px 6px', fontWeight: 600, color: '#0F172A' }}>{selectedInvoice.vehicleDetails}</td>
-                          <td style={{ padding: '8px 6px', textAlign: 'right', color: '#0F172A', fontWeight: 600 }}>
-                            ₹{selectedInvoice.amount.toLocaleString('en-IN')}
-                          </td>
-                          <td style={{ padding: '8px 6px', textAlign: 'center', color: '#334155', fontWeight: 600 }}>01</td>
-                          <td style={{ padding: '8px 6px', textAlign: 'right', fontWeight: 700, color: '#0F172A' }}>
-                            ₹{selectedInvoice.amount.toLocaleString('en-IN')}
-                          </td>
-                        </tr>
-                      </tbody>
-                    </table>
+                    <div className="print-invoice-items-wrap" style={{ marginBottom: '16px', flex: 1 }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
+                        <thead>
+                          <tr style={{ borderBottom: '2px solid #E2E8F0' }}>
+                            <th style={{ padding: '8px 6px', textAlign: 'left', fontWeight: 800, color: '#0F172A', width: '45px' }}>No.</th>
+                            <th style={{ padding: '8px 6px', textAlign: 'left', fontWeight: 800, color: '#0F172A' }}>Product Description</th>
+                            <th style={{ padding: '8px 6px', textAlign: 'right', fontWeight: 800, color: '#0F172A', width: '100px' }}>Price</th>
+                            <th style={{ padding: '8px 6px', textAlign: 'center', fontWeight: 800, color: '#0F172A', width: '60px' }}>QTY</th>
+                            <th style={{ padding: '8px 6px', textAlign: 'right', fontWeight: 800, color: '#0F172A', width: '110px' }}>Total</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr style={{ borderBottom: '1px solid #F1F5F9' }}>
+                            <td style={{ padding: '8px 6px', color: '#64748B', fontWeight: 600 }}>01</td>
+                            <td style={{ padding: '8px 6px', fontWeight: 600, color: '#0F172A' }}>{selectedInvoice.vehicleDetails}</td>
+                            <td style={{ padding: '8px 6px', textAlign: 'right', color: '#0F172A', fontWeight: 600 }}>
+                              ₹{selectedInvoice.amount.toLocaleString('en-IN')}
+                            </td>
+                            <td style={{ padding: '8px 6px', textAlign: 'center', color: '#334155', fontWeight: 600 }}>01</td>
+                            <td style={{ padding: '8px 6px', textAlign: 'right', fontWeight: 700, color: '#0F172A' }}>
+                              ₹{selectedInvoice.amount.toLocaleString('en-IN')}
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
 
                     {/* Payment Method & Total */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: '20px', marginBottom: '16px' }}>
+                    <div className="print-invoice-summary-wrap" style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: '20px', marginBottom: '16px', marginTop: 'auto' }}>
                       <div>
                         <div style={{ fontSize: '0.82rem', fontWeight: 800, color: '#0F172A', marginBottom: '3px' }}>
                           Payment Method
@@ -995,6 +1006,7 @@ export default function FinancePage() {
 
                     {/* Bottom Section: Contact Info (Left), Thank You Note (Center), Signature (Right) */}
                     <div
+                      className="print-invoice-footer"
                       style={{
                         position: 'relative',
                         zIndex: 2,
@@ -1200,7 +1212,7 @@ export default function FinancePage() {
               </div>
             </div>
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', paddingTop: '4px' }}>
+            <div className="no-print" style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', paddingTop: '4px' }}>
               <button
                 type="button"
                 onClick={() => {

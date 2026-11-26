@@ -347,13 +347,12 @@ export function getAllCarOptions(): string[] {
 }
 
 /**
- * Builds deduplicated showroom stock labels not already in the default catalog for `SearchableCarSelect`.
+ * Builds deduplicated showroom stock labels from saved inventory vehicles for `SearchableCarSelect`.
  */
 export function buildInventoryCarOptions(
   vehicles: ReadonlyArray<{ year?: number | string; make?: string; model?: string; variant?: string }>,
   options: { includeYear?: boolean } = {}
 ): string[] {
-  const defaultSet = new Set(getAllCarOptions().map((o) => o.toLowerCase()));
   const seen = new Set<string>();
   const list: string[] = [];
   for (const v of vehicles) {
@@ -362,11 +361,53 @@ export function buildInventoryCarOptions(
       : [v.make, v.model, v.variant];
     const label = parts.filter(Boolean).join(' ').trim();
     const key = label.toLowerCase();
-    if (label && !defaultSet.has(key) && !seen.has(key)) {
+    if (label && !seen.has(key)) {
       seen.add(key);
       list.push(label);
     }
   }
   return list;
+}
+
+/**
+ * Extracts unique vehicle makes/brands currently stored in the dealership inventory.
+ */
+export function buildInventoryBrands(
+  vehicles: ReadonlyArray<{ make?: string }>
+): string[] {
+  const seen = new Set<string>();
+  const brands: string[] = [];
+  for (const v of vehicles) {
+    const brand = String(v.make || '').trim();
+    const key = brand.toLowerCase();
+    if (brand && !seen.has(key)) {
+      seen.add(key);
+      brands.push(brand);
+    }
+  }
+  return brands;
+}
+
+/**
+ * Extracts unique models currently stored in the dealership inventory for a given make/brand.
+ */
+export function buildInventoryModelsForBrand(
+  vehicles: ReadonlyArray<{ make?: string; model?: string; variant?: string }>,
+  brand: string
+): string[] {
+  const targetBrand = brand.trim().toLowerCase();
+  if (!targetBrand) return [];
+  const seen = new Set<string>();
+  const models: string[] = [];
+  for (const v of vehicles) {
+    if (String(v.make || '').trim().toLowerCase() !== targetBrand) continue;
+    const modelLabel = [v.model, v.variant].filter(Boolean).join(' ').trim();
+    const key = modelLabel.toLowerCase();
+    if (modelLabel && !seen.has(key)) {
+      seen.add(key);
+      models.push(modelLabel);
+    }
+  }
+  return models;
 }
 

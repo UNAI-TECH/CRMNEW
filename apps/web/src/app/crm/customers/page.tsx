@@ -3,6 +3,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { api } from '@/lib/client/api-client';
 import { getTestDrives } from '@/lib/client/stores/test-drive-store';
+import { filterAssignableEmployees } from '@/lib/client/stores/employee-store';
 import { buildInventoryCarOptions } from '@/lib/data/car-catalog';
 import { APP_CARD_PALETTES } from '@/lib/data/theme-palettes';
 import { SearchableCarSelect } from '@/components/ui/SearchableCarSelect';
@@ -39,6 +40,7 @@ export default function CustomersPage() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [leads, setLeads] = useState<any[]>([]);
   const [deals, setDeals] = useState<any[]>([]);
+  const [vehicles, setVehicles] = useState<any[]>([]);
   const [employees, setEmployees] = useState<any[]>([]);
   const [appointments, setAppointments] = useState<any[]>([]);
   const [quotations, setQuotations] = useState<any[]>([]);
@@ -52,6 +54,7 @@ export default function CustomersPage() {
     setCustomers([...api.getCustomers()]);
     setLeads([...api.getLeads()]);
     setDeals([...api.getDeals()]);
+    setVehicles([...api.getVehicles()]);
     setEmployees([...api.getEmployees()]);
     setAppointments([...api.getAppointments()]);
     setQuotations([...api.getQuotations()]);
@@ -67,6 +70,9 @@ export default function CustomersPage() {
     });
     api.fetchDeals().then((data) => {
       if (Array.isArray(data)) setDeals([...data]);
+    });
+    api.fetchVehicles().then((data) => {
+      if (Array.isArray(data)) setVehicles([...data]);
     });
     api.fetchEmployees().then((data) => {
       if (Array.isArray(data)) setEmployees([...data]);
@@ -88,6 +94,7 @@ export default function CustomersPage() {
       setCustomers([...api.getCustomers()]);
       setLeads([...api.getLeads()]);
       setDeals([...api.getDeals()]);
+      setVehicles([...api.getVehicles()]);
       setEmployees([...api.getEmployees()]);
       setAppointments([...api.getAppointments()]);
       setQuotations([...api.getQuotations()]);
@@ -120,7 +127,8 @@ export default function CustomersPage() {
   const [formData, setFormData] = useState(emptyCustomerForm);
   const [editingCustomerId, setEditingCustomerId] = useState<string | null>(null);
 
-  const inventoryCarOptions = useMemo(() => buildInventoryCarOptions(api.getVehicles()), []);
+  const inventoryCarOptions = useMemo(() => buildInventoryCarOptions(vehicles), [vehicles]);
+  const assignableEmployees = useMemo(() => filterAssignableEmployees(employees), [employees]);
 
   const getCustomerCarPreference = (c: Customer) => {
     // 1. Check if customer has an active deal (matches deals in api-client)
@@ -998,7 +1006,7 @@ export default function CustomersPage() {
                 value={formData.preferredVehicle}
                 onChange={(val) => setFormData({ ...formData, preferredVehicle: val })}
                 inventoryOptions={inventoryCarOptions}
-                placeholder="Search or select car brand & model..."
+                placeholder="Select car from inventory..."
                 openDirection="up"
               />
             </div>
@@ -1024,7 +1032,7 @@ export default function CustomersPage() {
               value={formData.assignedTo}
               onChange={(e) => {
                 const empId = e.target.value;
-                const emp = employees.find((em) => em.id === empId);
+                const emp = assignableEmployees.find((em) => em.id === empId);
                 setFormData({
                   ...formData,
                   assignedTo: empId,
@@ -1034,7 +1042,7 @@ export default function CustomersPage() {
               style={{ cursor: 'pointer' }}
             >
               <option value="">Unassigned (Assign on Intake)</option>
-              {employees.map((emp) => (
+              {assignableEmployees.map((emp) => (
                 <option key={emp.id} value={emp.id}>
                   👤 {emp.full_name} — {(emp.role || 'Sales').replace(/_/g, ' ')} ({emp.department || 'Sales Desk'})
                 </option>

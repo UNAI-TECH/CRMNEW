@@ -283,13 +283,15 @@ export default function EmployeeLoginPage() {
     try {
       const result = await setEmployeePermanentPassword(
         activeEmployee.userId || activeEmployee.id,
-        newPassword
+        newPassword,
+        activeEmployee.tenantId,
+        activeEmployee.id
       );
 
       if (result.success) {
         const updated = {
           ...activeEmployee,
-          password: newPassword,
+          password: '',
           isPasswordSet: true,
           mustChangePassword: false,
           isTemporaryPassword: false,
@@ -328,7 +330,8 @@ export default function EmployeeLoginPage() {
     try {
       const result = await verifyEmployeeLogin(
         activeEmployee.userId || activeEmployee.employeeCode,
-        passwordInput
+        passwordInput,
+        activeEmployee.tenantId
       );
 
       if (result.success && result.employee) {

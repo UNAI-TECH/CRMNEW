@@ -263,11 +263,10 @@ export function InvoiceDocumentGenerator({
   // Download PDF / Print
   const handleDownloadPDF = () => {
     setShowPreview(true);
-    setToastMessage('Opening print dialog to Save / Download as PDF...');
+    setToastMessage(null);
     setTimeout(() => {
       window.print();
-      setToastMessage(null);
-    }, 450);
+    }, 350);
   };
 
   const dealershipTradeName = company.tradeName || company.legalName || 'Dealership';
@@ -342,6 +341,7 @@ export function InvoiceDocumentGenerator({
       {/* Toast Notification */}
       {toastMessage && (
         <div
+          className="no-print"
           style={{
             position: 'fixed',
             top: '20px',
@@ -1265,14 +1265,14 @@ export function InvoiceDocumentGenerator({
                 )}
 
                 {/* Document Content (z-index 2 over decorative graphics & watermark) */}
-                <div style={{ position: 'relative', zIndex: 2 }}>
+                <div className="print-invoice-body" style={{ position: 'relative', zIndex: 2, flex: 1, display: 'flex', flexDirection: 'column' }}>
                   {/* TOP HEADER: INVOICE title & Company Contact */}
                   <div
                     style={{
                       display: 'flex',
                       justifyContent: 'space-between',
                       alignItems: 'flex-start',
-                      marginBottom: '16px',
+                      marginBottom: '20px',
                     }}
                   >
                     {/* Left: Big Bold "INVOICE" and Invoice No */}
@@ -1370,7 +1370,7 @@ export function InvoiceDocumentGenerator({
                   </div>
 
                   {/* INVOICE TO (Customer Billing Address) */}
-                  <div style={{ marginBottom: '16px' }}>
+                  <div style={{ marginBottom: '20px' }}>
                     <div
                       style={{
                         fontSize: '0.76rem',
@@ -1418,7 +1418,7 @@ export function InvoiceDocumentGenerator({
                   </div>
 
                   {/* CLEAN ITEMIZED PRODUCTS / SERVICES TABLE */}
-                  <div style={{ marginBottom: '16px' }}>
+                  <div className="print-invoice-items-wrap" style={{ marginBottom: '16px', flex: 1 }}>
                     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
                       <thead>
                         <tr style={{ borderBottom: '2px solid #E2E8F0' }}>
@@ -1478,12 +1478,14 @@ export function InvoiceDocumentGenerator({
 
                   {/* PAYMENT METHOD & TERMS (LEFT) VS TOTALS CALCULATION (RIGHT) */}
                   <div
+                    className="print-invoice-summary-wrap"
                     style={{
                       display: 'grid',
                       gridTemplateColumns: '1.4fr 1fr',
                       gap: '20px',
                       alignItems: 'flex-start',
                       marginBottom: '16px',
+                      marginTop: 'auto',
                     }}
                   >
                     {/* Left Side: Payment Method & Terms */}
@@ -1566,6 +1568,7 @@ export function InvoiceDocumentGenerator({
 
                 {/* BOTTOM SECTION: Contact Info (Left), Thank You Message (Center), Signature (Right) */}
                 <div
+                  className="print-invoice-footer"
                   style={{
                     position: 'relative',
                     zIndex: 2,

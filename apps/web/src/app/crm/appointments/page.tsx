@@ -7,6 +7,7 @@ import { Modal } from '@/components/ui/Modal';
 import { ToastBanner, useToast } from '@/components/ui/Toast';
 import { StatusBadge } from '@/components/ui/StatusBadge';
 import { SearchableCarSelect } from '@/components/ui/SearchableCarSelect';
+import { filterAssignableEmployees } from '@/lib/client/stores/employee-store';
 import { buildInventoryCarOptions } from '@/lib/data/car-catalog';
 import { APP_CARD_PALETTES } from '@/lib/data/theme-palettes';
 import {
@@ -86,6 +87,10 @@ export default function AppointmentsPage() {
   const inventoryCarOptions = useMemo(
     () => buildInventoryCarOptions(vehicles, { includeYear: true }),
     [vehicles]
+  );
+  const assignableEmployees = useMemo(
+    () => filterAssignableEmployees(employees),
+    [employees]
   );
 
   const handleStartEdit = (apt: Appointment) => {
@@ -541,7 +546,7 @@ export default function AppointmentsPage() {
               value={formData.assignedTo}
               onChange={(e) => {
                 const empId = e.target.value;
-                const emp = employees.find((em) => em.id === empId);
+                const emp = assignableEmployees.find((em) => em.id === empId);
                 setFormData({
                   ...formData,
                   assignedTo: empId,
@@ -550,7 +555,7 @@ export default function AppointmentsPage() {
               }}
             >
               <option value="">-- Select Showroom Host / Consultant --</option>
-              {employees.map((emp) => (
+              {assignableEmployees.map((emp) => (
                 <option key={emp.id} value={emp.id}>
                   👤 {emp.full_name} — {(emp.role || 'Sales').replace(/_/g, ' ')} ({emp.department || 'Sales Desk'})
                 </option>

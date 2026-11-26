@@ -40,25 +40,51 @@ export async function GET(req: NextRequest) {
   const tenantId = auth.session.tenantId;
 
   try {
-    const [vehiclesRes, customersRes, leadsRes, dealsRes, appointmentsRes, employeesRes, testDrivesRes, quotationsRes, invoicesRes, paymentsRes] = await Promise.all([
+    const [vehiclesRes, customersRes, leadsRes, dealsRes, appointmentsRes, employeesRes, testDrivesRes, quotationsRes, invoicesRes, paymentsRes, tenantRes] = await Promise.all([
       supabaseAdmin.from('vehicles').select('*').eq('tenant_id', tenantId),
       supabaseAdmin.from('customers').select('*').eq('tenant_id', tenantId).order('created_at', { ascending: false }),
       supabaseAdmin.from('leads').select('*').eq('tenant_id', tenantId).order('created_at', { ascending: false }),
       supabaseAdmin.from('deals').select('*').eq('tenant_id', tenantId).order('created_at', { ascending: false }),
       supabaseAdmin.from('appointments').select('*').eq('tenant_id', tenantId).order('created_at', { ascending: false }),
-      supabaseAdmin.from('employees').select('id, full_name, email, role, department').eq('tenant_id', tenantId),
+      supabaseAdmin.from('employees').select('id, full_name, email, role, department, is_active').eq('tenant_id', tenantId),
       supabaseAdmin.from('test_drives').select('*').eq('tenant_id', tenantId).order('created_at', { ascending: false }),
       supabaseAdmin.from('quotations').select('*').eq('tenant_id', tenantId).order('created_at', { ascending: false }),
       supabaseAdmin.from('invoices').select('*').eq('tenant_id', tenantId).order('created_at', { ascending: false }),
       supabaseAdmin.from('payments').select('*').eq('tenant_id', tenantId).order('created_at', { ascending: false }),
+      supabaseAdmin.from('tenants').select('settings').eq('id', tenantId).maybeSingle(),
     ]);
+
+    let pipelineStages: any[] | null = Array.isArray(tenantRes?.data?.settings?.pipeline_stages)
+      ? tenantRes.data.settings.pipeline_stages
+      : null;
+
+    if (!pipelineStages) {
+      try {
+        const { data: pipeCfg } = await supabaseAdmin
+          .from('dealership_pipeline_configs')
+          .select('stages')
+          .eq('tenant_id', tenantId)
+          .maybeSingle();
+        if (Array.isArray(pipeCfg?.stages) && pipeCfg.stages.length > 0) {
+          pipelineStages = pipeCfg.stages;
+        }
+      } catch {}
+    }
 
     const employees = employeesRes.data || [];
     const { primaryBranchId } = await ensureTenantAndBranch(tenantId);
 
     // Requirement 3: Ensure every customer (both old and newly registered) appears in the pipeline
     // as an enquiry lead in "New Enquiries" (status: 'new') until they are contacted.
-    const allLeads = leadsRes.data || [];
+    const allLeads = (leadsRes.data || []).map((l: any) => {
+      if (typeof l.timeline === 'string' && l.timeline.startsWith('__stage__:')) {
+        return {
+          ...l,
+          status: l.timeline.slice('__stage__:'.length) || l.status,
+        };
+      }
+      return l;
+    });
     const leadsByCustomer = new Map<string, any[]>();
     for (const l of allLeads) {
       if (l.customer_id) {
@@ -77,8 +103,8 @@ export async function GET(req: NextRequest) {
         (appointmentsRes.data || []).some((a: any) => a.customer_id === cust.id || custLeads.some((l) => l.id === a.lead_id)) ||
         (testDrivesRes.data || []).some((td: any) => td.customer_id === cust.id);
 
-      const isContactedOrBeyond = custLeads.some((l) =>
-        ['contacted', 'qualified', 'appointment_set', 'test_drive', 'negotiation', 'converted', 'lost'].includes(l.status)
+      const isContactedOrBeyond = custLeads.some(
+        (l) => Boolean(l.status) && !['new', 'assigned'].includes(l.status)
       );
 
       if (!isContactedOrBeyond && !hasRealActivity) {
@@ -236,6 +262,7 @@ export async function GET(req: NextRequest) {
       quotations: quotationsRes.data || [],
       invoices: invoicesRes.data || [],
       payments: paymentsRes.data || [],
+      pipeline_stages: pipelineStages,
     });
   } catch (err: any) {
     return NextResponse.json({ error: err?.message || 'Server error' }, { status: 500 });
@@ -259,7 +286,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Missing or invalid entity or data object' }, { status: 400 });
     }
 
-    const ALLOWED_ENTITIES = ['vehicle', 'customer', 'lead', 'deal', 'appointment', 'test_drive'];
+    const ALLOWED_ENTITIES = ['vehicle', 'customer', 'lead', 'deal', 'appointment', 'test_drive', 'pipeline_config'];
     if (!ALLOWED_ENTITIES.includes(entity)) {
       return NextResponse.json(
         { error: `Invalid entity '${entity}'. Allowed entities: ${ALLOWED_ENTITIES.join(', ')}` },
@@ -278,10 +305,12 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'Validation failed', issues: [{ field: 'phone', message: 'Valid phone number is required' }] }, { status: 400 });
       }
     } else if (entity === 'lead') {
-      const VALID_LEAD_STATUSES = ['new', 'assigned', 'contacted', 'qualified', 'appointment_set', 'test_drive', 'negotiation', 'converted', 'lost', 'nurture'];
-      const status = data.status || 'new';
-      if (!VALID_LEAD_STATUSES.includes(status)) {
-        return NextResponse.json({ error: 'Validation failed', issues: [{ field: 'status', message: `Invalid lead status. Allowed: ${VALID_LEAD_STATUSES.join(', ')}` }] }, { status: 400 });
+      const status = String(data.status || 'new').trim();
+      if (!/^[a-z0-9_]{2,64}$/.test(status)) {
+        return NextResponse.json(
+          { error: 'Validation failed', issues: [{ field: 'status', message: 'Invalid lead stage status key.' }] },
+          { status: 400 }
+        );
       }
     }
 
@@ -469,7 +498,14 @@ export async function POST(req: NextRequest) {
         }
 
         const newStatus = data.status || 'new';
-        const leadPayload = {
+        const customFields =
+          data.customFields && typeof data.customFields === 'object'
+            ? data.customFields
+            : data.custom_fields && typeof data.custom_fields === 'object'
+            ? data.custom_fields
+            : {};
+
+        const leadPayload: Record<string, any> = {
           id: leadId,
           tenant_id: tenantId,
           branch_id: resolvedBranchId,
@@ -484,11 +520,36 @@ export async function POST(req: NextRequest) {
           preferred_fuel_type: data.preferred_fuel_type || data.preferredFuelType || 'Petrol',
           score: Number(data.score) || 75,
           notes: data.notes || '',
+          custom_fields: customFields,
           next_action_at: data.next_action_at || data.nextActionAt || null,
           updated_at: new Date().toISOString(),
         };
 
-        const res = await supabaseAdmin.from('leads').upsert(leadPayload, { onConflict: 'id' }).select();
+        let res = await supabaseAdmin.from('leads').upsert(leadPayload, { onConflict: 'id' }).select();
+        if (res.error && res.error.message?.includes('custom_fields')) {
+          const { custom_fields: _cf, ...withoutCf } = leadPayload;
+          res = await supabaseAdmin.from('leads').upsert(withoutCf, { onConflict: 'id' }).select();
+        }
+        if (
+          res.error &&
+          (res.error.code === '23514' ||
+            res.error.message?.includes('check constraint') ||
+            res.error.message?.includes('leads_status_check'))
+        ) {
+          const fallbackPayload: Record<string, any> = {
+            ...leadPayload,
+            status: 'negotiation',
+            timeline: `__stage__:${newStatus}`,
+          };
+          res = await supabaseAdmin.from('leads').upsert(fallbackPayload, { onConflict: 'id' }).select();
+          if (res.error && res.error.message?.includes('custom_fields')) {
+            const { custom_fields: _cf2, ...withoutCf2 } = fallbackPayload;
+            res = await supabaseAdmin.from('leads').upsert(withoutCf2, { onConflict: 'id' }).select();
+          }
+          if (!res.error && Array.isArray(res.data) && res.data[0]) {
+            res.data[0].status = newStatus;
+          }
+        }
         result = res.data;
         error = res.error;
 
@@ -990,6 +1051,42 @@ export async function POST(req: NextRequest) {
             .eq('customer_id', customerId)
             .eq('tenant_id', tenantId);
         }
+        break;
+      }
+
+      case 'pipeline_config': {
+        const stagesList = Array.isArray(data.stages) ? data.stages : [];
+        const { data: tenantRow } = await supabaseAdmin
+          .from('tenants')
+          .select('settings')
+          .eq('id', tenantId)
+          .maybeSingle();
+
+        const nextSettings = {
+          ...(tenantRow?.settings && typeof tenantRow.settings === 'object' ? tenantRow.settings : {}),
+          pipeline_stages: stagesList,
+        };
+
+        const tRes = await supabaseAdmin
+          .from('tenants')
+          .update({ settings: nextSettings, updated_at: new Date().toISOString() })
+          .eq('id', tenantId)
+          .select('id, settings');
+        result = tRes.data;
+        error = tRes.error;
+
+        try {
+          await supabaseAdmin
+            .from('dealership_pipeline_configs')
+            .upsert(
+              {
+                tenant_id: tenantId,
+                stages: stagesList,
+                updated_at: new Date().toISOString(),
+              },
+              { onConflict: 'tenant_id' }
+            );
+        } catch {}
         break;
       }
 

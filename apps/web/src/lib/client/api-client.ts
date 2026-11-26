@@ -796,7 +796,13 @@ class DataService {
     // 1. Identify which customers have already been contacted or advanced in the sales pipeline
     const contactedCustIds = new Set(
       this.data.leads
-        .filter((l) => (l as any).isContacted || (l as any).contactedAt || ['contacted', 'qualified', 'negotiation', 'converted', 'lost'].includes(l.status) || l.notes?.includes('[Moved to'))
+        .filter(
+          (l) =>
+            (l as any).isContacted ||
+            (l as any).contactedAt ||
+            (Boolean(l.status) && !['new', 'assigned', 'appointment_set', 'test_drive'].includes(l.status)) ||
+            l.notes?.includes('[Moved to')
+        )
         .map((l) => l.customerId)
         .filter(Boolean)
     );
@@ -963,20 +969,28 @@ class DataService {
         const custLast = cust?.lastName || cust?.last_name || '';
         const custFullName = `${custFirst} ${custLast}`.trim();
 
+        const resolvedStatus =
+          typeof r.timeline === 'string' && r.timeline.startsWith('__stage__:')
+            ? (r.timeline.slice('__stage__:'.length) || r.status || 'new')
+            : (r.status || 'new');
+
         const mappedLead: Lead = {
           id: r.id,
           tenantId: r.tenant_id || tenantId,
           branchId: r.branch_id || `b_${tenantId}_main`,
           customerId: r.customer_id,
           source: r.source || 'Showroom Walk-in',
-          status: r.status || 'new',
+          status: resolvedStatus,
           assignedTo: r.assigned_to || '',
           budgetMin: Number(r.budget_min) || 1500000,
           budgetMax: Number(r.budget_max) || 2000000,
           preferredMake: r.preferred_make || '',
           preferredModel: r.preferred_model || '',
           preferredFuelType: r.preferred_fuel_type || 'Petrol',
-          timeline: r.timeline || 'Within 7 days',
+          timeline:
+            typeof r.timeline === 'string' && r.timeline.startsWith('__stage__:')
+              ? ''
+              : (r.timeline || 'Within 7 days'),
           score: Number(r.score) || 75,
           notes: r.notes || '',
           nextActionAt: r.next_action_at || new Date(Date.now() + 86400000 * 2).toISOString(),
@@ -986,8 +1000,13 @@ class DataService {
           customerName: r.customer_name || custFullName || (r.preferred_model ? `Buyer for ${r.preferred_model}` : 'Walk-in Client'),
           customer: cust,
           assigneeName: r.assignee_name || r.assigneeName || (r.assigned_to ? 'Assigned Consultant' : 'Unassigned Consultant'),
-          branchName: 'Main Showroom',
+          branchName: r.branch_name || '',
         };
+        if (r.custom_fields && typeof r.custom_fields === 'object') {
+          (mappedLead as any).customFields = r.custom_fields;
+        } else if (r.customFields && typeof r.customFields === 'object') {
+          (mappedLead as any).customFields = r.customFields;
+        }
         if (cust?.phone) (mappedLead as any).customerPhone = cust.phone;
         if (cust?.email) (mappedLead as any).customerEmail = cust.email;
         if (r.appointment || r.appointment_details) {
@@ -1036,8 +1055,11 @@ class DataService {
       customerName: leadData.customerName || (cust ? `${cust.firstName} ${cust.lastName}` : 'Walk-in Customer'),
       customer: cust,
       assigneeName: leadData.assigneeName || leadData.assignedToName || (leadData.assignedTo ? 'Assigned Staff' : 'Unassigned Consultant'),
-      branchName: branch ? branch.name : 'Main Showroom',
+      branchName: branch ? branch.name : '',
     };
+    if (leadData.customFields && typeof leadData.customFields === 'object') {
+      (newLead as any).customFields = leadData.customFields;
+    }
     if (leadData.customerPhone || cust?.phone) {
       (newLead as any).customerPhone = leadData.customerPhone || cust?.phone;
     }
@@ -1057,6 +1079,7 @@ class DataService {
           entity: 'lead',
           data: {
             ...newLead,
+            custom_fields: (newLead as any).customFields || {},
             customer_name: newLead.customerName,
             customer_phone: (newLead as any).customerPhone,
             customer_email: (newLead as any).customerEmail,
@@ -1219,9 +1242,27 @@ class DataService {
   }
 
   async fetchVehicles(): Promise<Vehicle[]> {
-    if (isSupabaseConfigured()) {
+    const tenantId = getActiveTenantId();
+    let remoteRows: any[] | null = null;
+
+    // 1. Primary: fetch via authenticated server API route (/api/crm) using service role
+    if (typeof window !== 'undefined') {
       try {
-        const tenantId = getActiveTenantId();
+        const res = await fetch('/api/crm');
+        if (res.ok) {
+          const json = await res.json();
+          if (Array.isArray(json.vehicles)) {
+            remoteRows = json.vehicles;
+          }
+        }
+      } catch (err) {
+        console.warn('[API] /api/crm fetchVehicles note:', err);
+      }
+    }
+
+    // 2. Fallback: direct Supabase client
+    if (!remoteRows && isSupabaseConfigured()) {
+      try {
         const { data, error } = await supabase
           .from('vehicles')
           .select('*')
@@ -1231,46 +1272,51 @@ class DataService {
         if (error) {
           console.warn('[API] Supabase fetchVehicles error:', error.message);
         } else if (data && Array.isArray(data)) {
-          const remoteVehicles: Vehicle[] = data.map((r: any) => ({
-            id: r.id,
-            tenantId: r.tenant_id || tenantId,
-            branchId: r.branch_id || `b_${tenantId}_main`,
-            stockNumber: r.stock_number || 'STK-' + r.id.slice(-4),
-            vin: r.vin || 'VIN-' + r.id.slice(-8),
-            registrationNumber: r.registration_number || 'DL-01-AB-0000',
-            make: r.make || 'Toyota',
-            model: r.model || 'Fortuner',
-            variant: r.variant || 'Base',
-            year: Number(r.year) || 2024,
-            color: r.color || 'White',
-            mileageKm: Number(r.mileage_km) || 0,
-            fuelType: r.fuel_type || 'Petrol',
-            transmission: r.transmission || 'Automatic',
-            ownershipMode: r.ownership_mode || 'owned',
-            acquisitionCost: Number(r.acquisition_cost) || 0,
-            totalCost: Number(r.total_cost) || 0,
-            askingPrice: Number(r.asking_price) || 1000000,
-            minimumPrice: Number(r.minimum_price) || 950000,
-            status: r.status || 'available',
-            imageUrl: '',
-            images: [],
-            photos: [],
-            version: r.version || 1,
-            createdAt: r.created_at || new Date().toISOString(),
-            updatedAt: r.updated_at || new Date().toISOString(),
-            branchName: 'Main Showroom',
-          }));
-
-          const remoteIds = new Set(remoteVehicles.map((v) => v.id));
-          const unsyncedLocal = this.data.vehicles.filter((v) => !remoteIds.has(v.id));
-          this.data.vehicles = [...unsyncedLocal, ...remoteVehicles];
-          this.persist();
-          return this.data.vehicles;
+          remoteRows = data;
         }
       } catch (err) {
         console.error('[API] Failed to fetch vehicles from Supabase:', err);
       }
     }
+
+    if (remoteRows && Array.isArray(remoteRows)) {
+      const remoteVehicles: Vehicle[] = remoteRows.map((r: any) => ({
+        id: r.id,
+        tenantId: r.tenant_id || tenantId,
+        branchId: r.branch_id || `b_${tenantId}_main`,
+        stockNumber: r.stock_number || 'STK-' + r.id.slice(-4),
+        vin: r.vin || 'VIN-' + r.id.slice(-8),
+        registrationNumber: r.registration_number || 'DL-01-AB-0000',
+        make: r.make || '',
+        model: r.model || '',
+        variant: r.variant || '',
+        year: Number(r.year) || new Date().getFullYear(),
+        color: r.color || '',
+        mileageKm: Number(r.mileage_km) || 0,
+        fuelType: r.fuel_type || 'Petrol',
+        transmission: r.transmission || 'Automatic',
+        ownershipMode: r.ownership_mode || 'owned',
+        acquisitionCost: Number(r.acquisition_cost) || 0,
+        totalCost: Number(r.total_cost) || 0,
+        askingPrice: Number(r.asking_price) || 0,
+        minimumPrice: Number(r.minimum_price) || 0,
+        status: r.status || 'available',
+        imageUrl: r.image_url || '',
+        images: Array.isArray(r.images) ? r.images : [],
+        photos: Array.isArray(r.photos) ? r.photos : [],
+        version: r.version || 1,
+        createdAt: r.created_at || new Date().toISOString(),
+        updatedAt: r.updated_at || new Date().toISOString(),
+        branchName: r.branch_name || '',
+      }));
+
+      const remoteIds = new Set(remoteVehicles.map((v) => v.id));
+      const unsyncedLocal = this.data.vehicles.filter((v) => !remoteIds.has(v.id));
+      this.data.vehicles = [...unsyncedLocal, ...remoteVehicles];
+      this.persist();
+      return this.data.vehicles;
+    }
+
     return this.data.vehicles;
   }
 
@@ -1702,7 +1748,7 @@ class DataService {
         return existingLead;
       }
 
-      const currentRank = STAGE_RANK[existingLead.status] ?? 0;
+      const currentRank = STAGE_RANK[existingLead.status] ?? 99;
       let changed = false;
 
       // Update stage: when forceStage is true (explicit booking), place directly in targetStage unless already converted;

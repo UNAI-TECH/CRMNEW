@@ -60,9 +60,14 @@ export async function POST(req: NextRequest) {
 
     // 1. Look up employee in Supabase employees table
     const cleanId = rawUserId.toLowerCase();
-    const isGuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawUserId);
+    const isUuid = (val?: string | null) =>
+      Boolean(val && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val));
+    const rawEmpId = typeof body.employeeId === 'string' && isUuid(body.employeeId) ? body.employeeId.trim() : null;
+    const isGuid = isUuid(rawUserId);
     const filterQuery = isGuid
       ? `id.eq.${rawUserId},user_id.ilike.${cleanId},email.ilike.${cleanId}`
+      : rawEmpId
+      ? `id.eq.${rawEmpId},user_id.ilike.${cleanId},email.ilike.${cleanId}`
       : `user_id.ilike.${cleanId},email.ilike.${cleanId}`;
 
     let { data: empRows, error: empErr } = await supabaseAdmin
@@ -73,6 +78,12 @@ export async function POST(req: NextRequest) {
 
     if (empRows && body.tenantId) {
       empRows = empRows.filter((e: any) => e.tenant_id === body.tenantId);
+    }
+    if (empRows && rawEmpId) {
+      const exactById = empRows.filter((e: any) => e.id === rawEmpId);
+      if (exactById.length > 0) {
+        empRows = exactById;
+      }
     }
 
     // Check if multiple tenants match a generic User ID during verify-id
@@ -130,11 +141,81 @@ export async function POST(req: NextRequest) {
           department: 'Sales',
           user_id: c.user_id,
           is_active: true,
-          is_password_set: Boolean(c.password_hash),
+          is_password_set: Boolean(c.is_password_set ?? c.password_hash),
           password_hash: c.password_hash,
+          _fromUserCredentials: true,
         };
       }
     }
+
+    const resolveStaffRole = (rawRole?: string) => {
+      const roleMap: Record<string, string> = {
+        sales_executive: 'sales_executive',
+        finance_manager: 'finance_manager',
+        inventory_manager: 'inventory_manager',
+        service_advisor: 'service_advisor',
+        branch_manager: 'branch_manager',
+        tenant_admin: 'tenant_admin',
+      };
+      return roleMap[rawRole || ''] || 'sales_executive';
+    };
+
+    const applyStaffCookies = async (res: NextResponse, emp: any) => {
+      const userRole = resolveStaffRole(emp.role);
+      await setSessionCookies(res, {
+        accessToken: `emp-session-${emp.id}`,
+        userId: emp.id,
+        tenantId: emp.tenant_id,
+        role: userRole,
+        isOnboarded: true,
+      });
+
+      const staffCookieData = {
+        id: emp.id,
+        userId: emp.user_id || rawUserId,
+        employeeCode: emp.user_id || rawUserId,
+        fullName: emp.full_name,
+        email: emp.email,
+        role: userRole,
+        department: emp.department || 'Sales',
+        designation: emp.role || (userRole === 'sales_executive' ? 'Sales Executive' : 'Staff Member'),
+        branch: emp.branch || '',
+        avatarUrl: emp.avatar_url || '',
+        accessControl: emp.access_control || {
+          pipeline: true,
+          customers: true,
+          inventory: true,
+          deals: true,
+          finance: true,
+          testDrives: true,
+          documents: true,
+          reports: true,
+        },
+      };
+      res.cookies.set('crm-employee-session', encodeURIComponent(JSON.stringify(staffCookieData)), {
+        path: '/',
+        maxAge: 60 * 60 * 24 * 7,
+        sameSite: 'lax',
+      });
+
+      if (emp.tenant_id) {
+        try {
+          const { data: comp } = await supabaseAdmin
+            .from('company_profiles')
+            .select('trade_name, legal_name')
+            .eq('tenant_id', emp.tenant_id)
+            .limit(1);
+          const name = comp?.[0]?.trade_name || comp?.[0]?.legal_name;
+          if (name) {
+            res.cookies.set('crm-dealership-name', encodeURIComponent(name), {
+              path: '/',
+              maxAge: 60 * 60 * 24 * 7,
+              sameSite: 'lax',
+            });
+          }
+        } catch {}
+      }
+    };
 
     // ACTION: verify-id
     if (action === 'verify-id') {
@@ -202,30 +283,49 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      // 1. Reset in employees table
-      const { error: resetErr } = await supabaseAdmin
-        .from('employees')
-        .update({
-          password_hash: null,
-          is_password_set: false,
-        })
-        .eq('id', employee.id);
-
-      if (resetErr) {
-        console.error('[API/employees/auth] reset-password error:', resetErr.message);
-        return NextResponse.json({ success: false, error: resetErr.message }, { status: 500 });
-      }
-
-      // 2. Also clear in user_credentials fallback if present
-      try {
-        await supabaseAdmin
-          .from('user_credentials')
+      if (!employee._fromUserCredentials) {
+        let { error: resetErr } = await supabaseAdmin
+          .from('employees')
           .update({
             password_hash: null,
             is_password_set: false,
+            password_set_at: null,
           })
-          .or(`user_id.ilike.${cleanId},email.ilike.${cleanId}`);
-      } catch {}
+          .eq('id', employee.id);
+
+        if (resetErr && resetErr.message?.includes('column')) {
+          const retryReset = await supabaseAdmin
+            .from('employees')
+            .update({
+              password_hash: null,
+              is_password_set: false,
+            })
+            .eq('id', employee.id);
+          resetErr = retryReset.error;
+        }
+
+        if (resetErr) {
+          console.error('[API/employees/auth] reset-password error:', resetErr.message);
+          return NextResponse.json({ success: false, error: resetErr.message }, { status: 500 });
+        }
+      }
+
+      // Clear in user_credentials if present
+      const { error: credResetErr } = await supabaseAdmin
+        .from('user_credentials')
+        .update({
+          password_hash: null,
+          is_password_set: false,
+          password_set_at: null,
+        })
+        .or(`id.eq.${employee.id},user_id.ilike.${cleanId},email.ilike.${cleanId}`);
+
+      if (credResetErr && credResetErr.message?.includes('column')) {
+        await supabaseAdmin
+          .from('user_credentials')
+          .update({ password_hash: null })
+          .or(`id.eq.${employee.id},user_id.ilike.${cleanId},email.ilike.${cleanId}`);
+      }
 
       return NextResponse.json({
         success: true,
@@ -247,6 +347,16 @@ export async function POST(req: NextRequest) {
         );
       }
 
+      if (employee.is_password_set && employee.password_hash) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: 'A permanent password is already active for this User ID. Please ask your administrator to reset it first.',
+          },
+          { status: 409 }
+        );
+      }
+
       const newPassword = String(body.password || '').trim();
       const validation = validateStrongPassword(newPassword);
 
@@ -258,24 +368,104 @@ export async function POST(req: NextRequest) {
       }
 
       const hashed = hashPassword(newPassword);
+      const nowIso = new Date().toISOString();
+      let persisted = false;
+      let persistErrorMsg: string | null = null;
 
-      // Update in employees table
-      const { error: updateErr } = await supabaseAdmin
-        .from('employees')
-        .update({
-          password_hash: hashed,
-          is_password_set: true,
-          user_id: employee.user_id || rawUserId,
-        })
-        .eq('id', employee.id);
+      // 1. Prefer atomic PostgreSQL RPC when migration 009 is applied
+      const { data: rpcRows, error: rpcErr } = await supabaseAdmin.rpc('save_employee_permanent_password', {
+        p_employee_id: isUuid(employee.id) ? employee.id : null,
+        p_user_id: employee.user_id || rawUserId,
+        p_tenant_id: isUuid(employee.tenant_id) ? employee.tenant_id : null,
+        p_password_hash: hashed,
+      });
 
-      if (updateErr) {
-        console.warn('[API/employees/auth] update employee note:', updateErr.message);
+      if (!rpcErr && Array.isArray(rpcRows) && rpcRows.length > 0) {
+        persisted = true;
+      } else {
+        if (rpcErr && !rpcErr.message?.includes('Could not find the function') && rpcErr.code !== 'PGRST202' && rpcErr.code !== '42883') {
+          persistErrorMsg = rpcErr.message;
+        }
+
+        // 2. Direct update fallback on public.employees (supports pre-009 schemas)
+        if (!employee._fromUserCredentials) {
+          let { data: empUpdated, error: updateErr } = await supabaseAdmin
+            .from('employees')
+            .update({
+              password_hash: hashed,
+              is_password_set: true,
+              password_set_at: nowIso,
+              updated_at: nowIso,
+              user_id: employee.user_id || rawUserId,
+            })
+            .eq('id', employee.id)
+            .select('id, user_id, is_password_set');
+
+          if (updateErr && updateErr.message?.includes('column')) {
+            const retryUpdate = await supabaseAdmin
+              .from('employees')
+              .update({
+                password_hash: hashed,
+                is_password_set: true,
+                user_id: employee.user_id || rawUserId,
+              })
+              .eq('id', employee.id)
+              .select('id, user_id, is_password_set');
+            empUpdated = retryUpdate.data;
+            updateErr = retryUpdate.error;
+          }
+
+          if (updateErr) {
+            persistErrorMsg = updateErr.message;
+          } else if (empUpdated && empUpdated.length > 0) {
+            persisted = true;
+          }
+        }
+
+        // 3. Fallback / mirror update in public.user_credentials
+        let { data: credUpdated, error: credUpdateErr } = await supabaseAdmin
+          .from('user_credentials')
+          .update({
+            password_hash: hashed,
+            is_password_set: true,
+            password_set_at: nowIso,
+          })
+          .or(`id.eq.${employee.id},user_id.ilike.${cleanId},email.ilike.${cleanId}`)
+          .select('id');
+
+        if (credUpdateErr && credUpdateErr.message?.includes('column')) {
+          const retryCred = await supabaseAdmin
+            .from('user_credentials')
+            .update({ password_hash: hashed })
+            .or(`id.eq.${employee.id},user_id.ilike.${cleanId},email.ilike.${cleanId}`)
+            .select('id');
+          credUpdated = retryCred.data;
+          credUpdateErr = retryCred.error;
+        }
+
+        if (!persisted && !credUpdateErr && credUpdated && credUpdated.length > 0) {
+          persisted = true;
+        } else if (!persisted && credUpdateErr && !persistErrorMsg) {
+          persistErrorMsg = credUpdateErr.message;
+        }
+      }
+
+      if (!persisted) {
+        console.error('[API/employees/auth] set-password persistence failed:', persistErrorMsg || 'No matching row updated');
+        return NextResponse.json(
+          {
+            success: false,
+            error: persistErrorMsg
+              ? `Database save failed: ${persistErrorMsg}`
+              : 'Database save failed: no matching employee record was updated. Please verify SQL migration 009 is applied.',
+          },
+          { status: 500 }
+        );
       }
 
       const res = NextResponse.json({
         success: true,
-        message: 'Permanent password created successfully.',
+        message: 'Permanent password created and saved in database successfully.',
         employee: {
           id: employee.id,
           tenantId: employee.tenant_id,
@@ -284,75 +474,12 @@ export async function POST(req: NextRequest) {
           role: employee.role,
           department: employee.department,
           userId: employee.user_id || rawUserId,
+          avatarUrl: employee.avatar_url || '',
           isPasswordSet: true,
         },
       });
 
-      // Set authentic session cookies so employee is immediately logged in
-      const roleMap: Record<string, string> = {
-        sales_executive: 'sales_executive',
-        finance_manager: 'finance_manager',
-        inventory_manager: 'inventory_manager',
-        service_advisor: 'service_advisor',
-        branch_manager: 'branch_manager',
-        tenant_admin: 'tenant_admin',
-      };
-      const userRole = roleMap[employee.role] || 'sales_executive';
-
-      await setSessionCookies(res, {
-        accessToken: `emp-session-${employee.id}`,
-        userId: employee.id,
-        tenantId: employee.tenant_id,
-        role: userRole,
-        isOnboarded: true,
-      });
-
-      const staffCookieData = {
-        id: employee.id,
-        userId: employee.user_id || rawUserId,
-        employeeCode: employee.user_id || rawUserId,
-        fullName: employee.full_name,
-        email: employee.email,
-        role: userRole,
-        department: employee.department || 'Sales',
-        designation: userRole === 'sales_executive' ? 'Sales Executive' : 'Staff Member',
-        branch: 'Main Showroom',
-        avatarUrl: employee.avatar_url || '',
-        accessControl: employee.access_control || {
-          pipeline: true,
-          customers: true,
-          inventory: true,
-          deals: true,
-          finance: true,
-          testDrives: true,
-          documents: true,
-          reports: true,
-        },
-      };
-      res.cookies.set('crm-employee-session', encodeURIComponent(JSON.stringify(staffCookieData)), {
-        path: '/',
-        maxAge: 60 * 60 * 24 * 7,
-        sameSite: 'lax',
-      });
-
-      if (employee.tenant_id) {
-        try {
-          const { data: comp } = await supabaseAdmin
-            .from('company_profiles')
-            .select('trade_name, legal_name')
-            .eq('tenant_id', employee.tenant_id)
-            .limit(1);
-          const name = comp?.[0]?.trade_name || comp?.[0]?.legal_name;
-          if (name) {
-            res.cookies.set('crm-dealership-name', encodeURIComponent(name), {
-              path: '/',
-              maxAge: 60 * 60 * 24 * 7,
-              sameSite: 'lax',
-            });
-          }
-        } catch {}
-      }
-
+      await applyStaffCookies(res, employee);
       return res;
     }
 
@@ -362,6 +489,13 @@ export async function POST(req: NextRequest) {
         return NextResponse.json(
           { success: false, error: `User ID '${rawUserId}' was not found.` },
           { status: 404 }
+        );
+      }
+
+      if (employee.is_active === false) {
+        return NextResponse.json(
+          { success: false, error: 'This employee account is deactivated. Please contact your administrator.' },
+          { status: 403 }
         );
       }
 
@@ -396,75 +530,14 @@ export async function POST(req: NextRequest) {
           role: employee.role,
           department: employee.department,
           userId: employee.user_id || rawUserId,
+          avatarUrl: employee.avatar_url || '',
+          designation: employee.role || 'Staff Member',
+          accessControl: employee.access_control || undefined,
           isPasswordSet: true,
         },
       });
 
-      const roleMap: Record<string, string> = {
-        sales_executive: 'sales_executive',
-        finance_manager: 'finance_manager',
-        inventory_manager: 'inventory_manager',
-        service_advisor: 'service_advisor',
-        branch_manager: 'branch_manager',
-        tenant_admin: 'tenant_admin',
-      };
-      const userRole = roleMap[employee.role] || 'sales_executive';
-
-      await setSessionCookies(res, {
-        accessToken: `emp-session-${employee.id}`,
-        userId: employee.id,
-        tenantId: employee.tenant_id,
-        role: userRole,
-        isOnboarded: true,
-      });
-
-      const staffLoginCookie = {
-        id: employee.id,
-        userId: employee.user_id || rawUserId,
-        employeeCode: employee.user_id || rawUserId,
-        fullName: employee.full_name,
-        email: employee.email,
-        role: userRole,
-        department: employee.department || 'Sales',
-        designation: userRole === 'sales_executive' ? 'Sales Executive' : 'Staff Member',
-        branch: 'Main Showroom',
-        avatarUrl: employee.avatar_url || '',
-        accessControl: employee.access_control || {
-          pipeline: true,
-          customers: true,
-          inventory: true,
-          deals: true,
-          finance: true,
-          testDrives: true,
-          documents: true,
-          reports: true,
-        },
-      };
-
-      res.cookies.set('crm-employee-session', encodeURIComponent(JSON.stringify(staffLoginCookie)), {
-        path: '/',
-        maxAge: 60 * 60 * 24 * 7,
-        sameSite: 'lax',
-      });
-
-      if (employee.tenant_id) {
-        try {
-          const { data: comp } = await supabaseAdmin
-            .from('company_profiles')
-            .select('trade_name, legal_name')
-            .eq('tenant_id', employee.tenant_id)
-            .limit(1);
-          const name = comp?.[0]?.trade_name || comp?.[0]?.legal_name;
-          if (name) {
-            res.cookies.set('crm-dealership-name', encodeURIComponent(name), {
-              path: '/',
-              maxAge: 60 * 60 * 24 * 7,
-              sameSite: 'lax',
-            });
-          }
-        } catch {}
-      }
-
+      await applyStaffCookies(res, employee);
       return res;
     }
 

@@ -2,7 +2,6 @@
 
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { Search, ChevronDown, X, Check, Car } from 'lucide-react';
-import { DEFAULT_CAR_CATALOG } from '@/lib/data/car-catalog';
 
 interface SearchableCarSelectProps {
   value: string;
@@ -16,7 +15,7 @@ export function SearchableCarSelect({
   value,
   onChange,
   inventoryOptions = [],
-  placeholder = 'Search or select car brand & model...',
+  placeholder = 'Select vehicle from inventory...',
   openDirection = 'up',
 }: SearchableCarSelectProps) {
   const [isOpen, setIsOpen] = useState(false);
@@ -58,20 +57,7 @@ export function SearchableCarSelect({
     return inventoryOptions.filter((item) => item.toLowerCase().includes(normalizedQuery));
   }, [inventoryOptions, normalizedQuery]);
 
-  const filteredGroups = useMemo(() => {
-    if (!normalizedQuery) return DEFAULT_CAR_CATALOG;
-    return DEFAULT_CAR_CATALOG.map((group) => {
-      const brandMatches = group.brand.toLowerCase().includes(normalizedQuery);
-      const matchingModels = brandMatches
-        ? group.models
-        : group.models.filter((m) =>
-            `${group.brand} ${m}`.toLowerCase().includes(normalizedQuery)
-          );
-      return { brand: group.brand, models: matchingModels };
-    }).filter((g) => g.models.length > 0);
-  }, [normalizedQuery]);
-
-  const hasMatches = filteredInventory.length > 0 || filteredGroups.length > 0;
+  const hasMatches = filteredInventory.length > 0;
 
   const handleSelect = (carLabel: string) => {
     onChange(carLabel);
@@ -194,7 +180,7 @@ export function SearchableCarSelect({
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search brand or model (e.g. Creta, XUV700, BMW)..."
+              placeholder="Search saved inventory vehicles..."
               style={{
                 width: '100%',
                 border: 'none',
@@ -269,56 +255,11 @@ export function SearchableCarSelect({
               </div>
             )}
 
-            {filteredGroups.map((group) => (
-              <div key={group.brand}>
-                <div
-                  style={{
-                    padding: '6px 12px 4px',
-                    fontSize: '0.7rem',
-                    fontWeight: 800,
-                    color: '#64748B',
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.05em',
-                    backgroundColor: '#F8FAFC',
-                    borderTop: '1px solid #F1F5F9',
-                  }}
-                >
-                  {group.brand}
-                </div>
-                {group.models.map((model) => {
-                  const fullLabel = `${group.brand} ${model}`;
-                  const selected = value === fullLabel;
-                  return (
-                    <button
-                      key={fullLabel}
-                      type="button"
-                      onClick={() => handleSelect(fullLabel)}
-                      style={{
-                        width: '100%',
-                        textAlign: 'left',
-                        padding: '7px 14px',
-                        border: 'none',
-                        backgroundColor: selected ? '#EEF2FF' : 'transparent',
-                        color: selected ? '#4338CA' : '#1E293B',
-                        fontSize: '0.84rem',
-                        fontWeight: selected ? 700 : 500,
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                      }}
-                    >
-                      <span>{fullLabel}</span>
-                      {selected && <Check size={14} style={{ color: '#4338CA' }} />}
-                    </button>
-                  );
-                })}
-              </div>
-            ))}
-
-            {!hasMatches && !normalizedQuery && (
+            {!hasMatches && (
               <div style={{ padding: '16px', textAlign: 'center', color: '#94A3B8', fontSize: '0.82rem' }}>
-                No models available
+                {inventoryOptions.length === 0
+                  ? 'No cars saved in Inventory yet. Add vehicles in Inventory or type a custom model.'
+                  : 'No saved inventory vehicles match your search.'}
               </div>
             )}
 

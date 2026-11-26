@@ -353,10 +353,20 @@ export default async function RootLayout({
           }}
         />
 
-        {/* Synchronous Session & Branding Cookie Injector (Eliminates SSR hydration flash) */}
+      </head>
+      <body>
+        <AuthProvider>
+          <Shell
+            initialSession={initialSession}
+            initialDealershipName={initialDealershipName}
+          >
+            {children}
+          </Shell>
+        </AuthProvider>
+        {/* Client-side Session & Branding Cookie Sync (afterInteractive avoids React script-tag warnings) */}
         <Script
           id="crm-sync-session-branding"
-          strategy="beforeInteractive"
+          strategy="afterInteractive"
           dangerouslySetInnerHTML={{
             __html: `
               (function() {
@@ -388,7 +398,7 @@ export default async function RootLayout({
                       if (!document.cookie.includes('crm-dealership-name=')) {
                         document.cookie = 'crm-dealership-name=' + encodeURIComponent(name) + '; path=/; max-age=604800; SameSite=Lax';
                       }
-                      document.addEventListener('DOMContentLoaded', function() {
+                      var applyBrandDom = function() {
                         var titleEl = document.getElementById('top-bar-brand-title');
                         if (titleEl && (!titleEl.textContent || !titleEl.textContent.trim())) {
                           titleEl.textContent = name;
@@ -399,7 +409,12 @@ export default async function RootLayout({
                           badgeEl.textContent = name.charAt(0).toUpperCase();
                           badgeEl.style.display = '';
                         }
-                      });
+                      };
+                      if (document.readyState === 'loading') {
+                        document.addEventListener('DOMContentLoaded', applyBrandDom);
+                      } else {
+                        applyBrandDom();
+                      }
                     }
                   }
                 } catch(e) {}
@@ -407,16 +422,6 @@ export default async function RootLayout({
             `,
           }}
         />
-      </head>
-      <body>
-        <AuthProvider>
-          <Shell
-            initialSession={initialSession}
-            initialDealershipName={initialDealershipName}
-          >
-            {children}
-          </Shell>
-        </AuthProvider>
       </body>
     </html>
   );

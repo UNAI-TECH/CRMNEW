@@ -42,8 +42,10 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ data: [], error: error.message }, { status: 400 });
     }
 
+    const sanitizedRows = (data || []).map(({ password_hash: _ph, ...rest }: any) => rest);
+
     return NextResponse.json({
-      data: data || [],
+      data: sanitizedRows,
       pagination: {
         total: count ?? (data?.length || 0),
         page,
@@ -137,7 +139,7 @@ export async function POST(req: NextRequest) {
       salary_category: body.salaryCategory || 'Annual CTC',
       access_control: body.accessControl || null,
       is_admin: Boolean(body.isAdmin),
-      is_password_set: Boolean(body.isPasswordSet),
+      ...(body.isPasswordSet === true ? { is_password_set: true } : {}),
       avatar_url: body.avatarUrl || body.avatar_url || null,
     };
 

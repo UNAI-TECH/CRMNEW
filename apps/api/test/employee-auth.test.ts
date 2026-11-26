@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import crypto from 'crypto';
+import { validateLeadTransition } from '@crm/business-rules';
+import type { LeadStatus } from '@crm/shared-types';
 
 // Replicating the robust security functions from employee auth
 function validateStrongPassword(password: string): { valid: boolean; errors: string[] } {
@@ -268,6 +270,201 @@ describe('Staff User ID Authentication & Strong Password Workflow', () => {
         name: 'Metro Honda Motors',
         logoUrl: 'https://metro.com/logo.png',
       });
+    });
+  });
+
+  describe('Permanent Password Persistence & Overwrite Guard', () => {
+    it('prevents overwriting an already active permanent password unless admin reset first', () => {
+      const canSetPassword = (record: { is_password_set: boolean; password_hash: string | null }) => {
+        return !(record.is_password_set && record.password_hash);
+      };
+
+      expect(canSetPassword({ is_password_set: false, password_hash: null })).toBe(true);
+      expect(canSetPassword({ is_password_set: true, password_hash: 'salt:hash' })).toBe(false);
+    });
+
+    it('treats missing DB write confirmation as a save error instead of succeeding silently', () => {
+      const resolvePersistenceOutcome = (persisted: boolean, dbError: string | null) => {
+        if (!persisted) {
+          return {
+            status: 500,
+            success: false,
+            error: dbError ? `Database save failed: ${dbError}` : 'Database save failed: no matching employee record was updated.',
+          };
+        }
+        return { status: 200, success: true };
+      };
+
+      expect(resolvePersistenceOutcome(false, 'column "password_hash" does not exist')).toEqual({
+        status: 500,
+        success: false,
+        error: 'Database save failed: column "password_hash" does not exist',
+      });
+      expect(resolvePersistenceOutcome(true, null)).toEqual({
+        status: 200,
+        success: true,
+      });
+    });
+  });
+
+  describe('Customer Assignment Filtering & Inventory-Only Vehicle Options', () => {
+    it('excludes Finance, Accountant, Technician, and inactive staff from assignment lists', () => {
+      const excludedKeywords = ['finance', 'accountant', 'account', 'technician'];
+      const isAssignable = (emp: { role?: string; department?: string; is_active?: boolean }) => {
+        if (emp.is_active === false) return false;
+        const text = `${emp.role || ''} ${emp.department || ''}`.toLowerCase();
+        return !excludedKeywords.some((kw) => text.includes(kw));
+      };
+
+      const team = [
+        { id: '1', full_name: 'kin', role: 'Finance Manager', department: 'Finance' },
+        { id: '2', full_name: 'anjali', role: 'Accountant', department: 'Finance' },
+        { id: '3', full_name: 'ravi', role: 'Technician', department: 'Service' },
+        { id: '4', full_name: 'rohit', role: 'Sales Executive', department: 'Sales' },
+        { id: '5', full_name: 'meera', role: 'Sales Manager', department: 'Sales' },
+        { id: '6', full_name: 'old', role: 'Sales Executive', department: 'Sales', is_active: false },
+      ];
+
+      expect(team.filter(isAssignable).map((e) => e.full_name)).toEqual(['rohit', 'meera']);
+    });
+
+    it('builds car options exclusively from stored inventory vehicles without skipping standard brands', () => {
+      const buildOptions = (vehicles: Array<{ make?: string; model?: string; variant?: string }>) => {
+        const seen = new Set<string>();
+        const list: string[] = [];
+        for (const v of vehicles) {
+          const label = [v.make, v.model, v.variant].filter(Boolean).join(' ').trim();
+          const key = label.toLowerCase();
+          if (label && !seen.has(key)) {
+            seen.add(key);
+            list.push(label);
+          }
+        }
+        return list;
+      };
+
+      expect(buildOptions([])).toEqual([]);
+      expect(
+        buildOptions([
+          { make: 'Hyundai', model: 'Creta', variant: '' },
+          { make: 'Hyundai', model: 'Creta', variant: '' },
+          { make: 'Tata Motors', model: 'Nexon', variant: 'XZ+' },
+        ])
+      ).toEqual(['Hyundai Creta', 'Tata Motors Nexon XZ+']);
+    });
+  });
+
+  describe('Custom Pipeline Stages, Insertion Order & Transition Rules', () => {
+    const CORE_STAGE_KEYS = new Set([
+      'new',
+      'assigned',
+      'contacted',
+      'qualified',
+      'appointment_set',
+      'test_drive',
+      'negotiation',
+      'converted',
+      'lost',
+      'nurture',
+    ]);
+
+    const slugifyStageKey = (label: string, existingKeys: ReadonlyArray<string>): string => {
+      const base =
+        label
+          .trim()
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '_')
+          .replace(/^_+|_+$/g, '') || 'custom_stage';
+      const rawKey = CORE_STAGE_KEYS.has(base) ? `custom_${base}` : base;
+      const existingSet = new Set(existingKeys);
+      if (!existingSet.has(rawKey)) return rawKey;
+      let counter = 2;
+      while (existingSet.has(`${rawKey}_${counter}`)) {
+        counter++;
+      }
+      return `${rawKey}_${counter}`;
+    };
+
+    const canTransitionCustomPipeline = (
+      stages: ReadonlyArray<{ key: string }>,
+      fromKey: string,
+      toKey: string
+    ): boolean => {
+      if (!fromKey || !toKey || fromKey === toKey) return false;
+      if (fromKey === 'converted') return false;
+
+      const fromIsCore = CORE_STAGE_KEYS.has(fromKey);
+      const toIsCore = CORE_STAGE_KEYS.has(toKey);
+      if (!fromIsCore || !toIsCore) {
+        return !(fromKey === 'new' && toKey === 'converted');
+      }
+
+      const fromIdx = stages.findIndex((s) => s.key === fromKey);
+      const toIdx = stages.findIndex((s) => s.key === toKey);
+      if (fromIdx !== -1 && toIdx === fromIdx + 1 && !(fromKey === 'new' && toKey === 'converted')) {
+        return true;
+      }
+
+      const hasCustomBetween =
+        fromIdx !== -1 &&
+        toIdx !== -1 &&
+        stages.slice(Math.min(fromIdx, toIdx) + 1, Math.max(fromIdx, toIdx)).some((s) => !CORE_STAGE_KEYS.has(s.key));
+      if (hasCustomBetween && !(fromKey === 'new' && toKey === 'converted')) {
+        return true;
+      }
+
+      return validateLeadTransition(fromKey as LeadStatus, toKey as LeadStatus);
+    };
+
+    it('generates collision-safe keys and avoids colliding with core stage keys', () => {
+      const defaults = ['new', 'contacted', 'qualified', 'appointment_set', 'test_drive', 'negotiation', 'converted'];
+
+      expect(slugifyStageKey('Loan & Insurance Approval', defaults)).toBe('loan_insurance_approval');
+      expect(slugifyStageKey('Negotiation', defaults)).toBe('custom_negotiation');
+      expect(slugifyStageKey('Negotiation', [...defaults, 'custom_negotiation'])).toBe('custom_negotiation_2');
+      expect(slugifyStageKey('   ', defaults)).toBe('custom_stage');
+    });
+
+    it('inserts custom stages before and after Negotiation and allows moving leads smoothly across them', () => {
+      const stages = [
+        { key: 'new', label: 'New Enquiries' },
+        { key: 'contacted', label: 'Contacted' },
+        { key: 'qualified', label: 'Qualified' },
+        { key: 'appointment_set', label: 'Appointment Set' },
+        { key: 'test_drive', label: 'Test Drive' },
+        { key: 'negotiation', label: 'Negotiation' },
+        { key: 'converted', label: 'Converted' },
+      ];
+
+      // Insert custom stage between Test Drive and Negotiation
+      const negIdx = stages.findIndex((s) => s.key === 'negotiation');
+      const beforeNegKey = slugifyStageKey('Pre-Approval & Trade-In', stages.map((s) => s.key));
+      stages.splice(negIdx, 0, { key: beforeNegKey, label: 'Pre-Approval & Trade-In' });
+
+      // Insert custom stage between Negotiation and Converted
+      const updatedNegIdx = stages.findIndex((s) => s.key === 'negotiation');
+      const afterNegKey = slugifyStageKey('Loan Sanction & RTO', stages.map((s) => s.key));
+      stages.splice(updatedNegIdx + 1, 0, { key: afterNegKey, label: 'Loan Sanction & RTO' });
+
+      expect(stages.map((s) => s.key)).toEqual([
+        'new',
+        'contacted',
+        'qualified',
+        'appointment_set',
+        'test_drive',
+        'pre_approval_trade_in',
+        'negotiation',
+        'loan_sanction_rto',
+        'converted',
+      ]);
+
+      expect(canTransitionCustomPipeline(stages, 'test_drive', 'pre_approval_trade_in')).toBe(true);
+      expect(canTransitionCustomPipeline(stages, 'pre_approval_trade_in', 'negotiation')).toBe(true);
+      expect(canTransitionCustomPipeline(stages, 'negotiation', 'loan_sanction_rto')).toBe(true);
+      expect(canTransitionCustomPipeline(stages, 'loan_sanction_rto', 'converted')).toBe(true);
+      // Direct jump still blocked for new -> converted and terminal converted stays locked
+      expect(canTransitionCustomPipeline(stages, 'new', 'converted')).toBe(false);
+      expect(canTransitionCustomPipeline(stages, 'converted', 'negotiation')).toBe(false);
     });
   });
 });
