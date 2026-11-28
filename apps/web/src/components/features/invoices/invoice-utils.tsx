@@ -191,3 +191,238 @@ export function getInvoiceColorSystem(brandColor: string = '#6253F8') {
   return { graphicAccent: hex, textAccent: hex, lightTint: '#F8FAFC', borderTint: '#CBD5E1' };
 }
 
+export function DocumentWatermark({
+  logoUrl,
+  dealershipName,
+  textAccent,
+  enabled = true,
+  opacity = 0.22,
+}: {
+  logoUrl?: string;
+  dealershipName?: string;
+  textAccent: string;
+  enabled?: boolean;
+  opacity?: number;
+}) {
+  if (!enabled) return null;
+  const cleanLogo = logoUrl && logoUrl !== '/unai-logo.png' ? logoUrl : '';
+
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        top: '50%',
+        left: '50%',
+        transform: 'translate(-50%, -50%)',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        pointerEvents: 'none',
+        userSelect: 'none',
+        zIndex: 1,
+        opacity: Math.max(opacity || 0, 0.22),
+        width: '80%',
+      }}
+    >
+      {cleanLogo ? (
+        <img
+          src={cleanLogo}
+          alt="Watermark"
+          style={{
+            maxWidth: '380px',
+            maxHeight: '380px',
+            width: '100%',
+            objectFit: 'contain',
+          }}
+        />
+      ) : (
+        <div
+          style={{
+            fontSize: '3.6rem',
+            fontWeight: 900,
+            letterSpacing: '0.12em',
+            textTransform: 'uppercase',
+            color: textAccent,
+            textAlign: 'center',
+            wordBreak: 'break-word',
+          }}
+        >
+          {dealershipName || 'DEALERSHIP'}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export interface DocumentCompanyInfo {
+  tradeName?: string;
+  legalName?: string;
+  logoUrl?: string;
+  phone?: string;
+  email?: string;
+  address?: string;
+  locality?: string;
+  city?: string;
+  state?: string;
+  pincode?: string;
+  signatureUrl?: string;
+  authorizedSignatoryName?: string;
+  authorizedSignatoryDesignation?: string;
+}
+
+export function DealershipBrandHeader({
+  company,
+  dealershipBrandName,
+  textAccent,
+}: {
+  company: DocumentCompanyInfo;
+  dealershipBrandName: string;
+  textAccent: string;
+}) {
+  return (
+    <div style={{ textAlign: 'right' }}>
+      {company.logoUrl ? (
+        <img
+          src={company.logoUrl}
+          alt="Logo"
+          style={{
+            maxHeight: '42px',
+            maxWidth: '150px',
+            objectFit: 'contain',
+            marginBottom: '6px',
+            display: 'inline-block',
+          }}
+        />
+      ) : (
+        <div
+          style={{
+            fontSize: '1.3rem',
+            fontWeight: 900,
+            color: textAccent,
+            letterSpacing: '-0.02em',
+            marginBottom: '4px',
+          }}
+        >
+          {dealershipBrandName}
+        </div>
+      )}
+      <div style={{ fontSize: '0.76rem', color: '#1E293B', lineHeight: 1.5, fontWeight: 600 }}>
+        {company.phone && (
+          <div>
+            <span style={{ color: textAccent, fontWeight: 700 }}>Tel: </span>
+            {company.phone}
+          </div>
+        )}
+        {company.email && (
+          <div>
+            <span style={{ color: textAccent, fontWeight: 700 }}>Mail: </span>
+            {company.email}
+          </div>
+        )}
+        <div>
+          {[company.address, company.locality, company.city, company.state, company.pincode].filter(Boolean).join(', ') || (
+            <span style={{ color: '#94A3B8', fontStyle: 'italic' }}>Address not configured</span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function DealershipDocumentFooter({
+  company,
+  textAccent,
+}: {
+  company: DocumentCompanyInfo;
+  textAccent: string;
+}) {
+  return (
+    <div
+      className="print-invoice-footer"
+      style={{
+        position: 'relative',
+        zIndex: 2,
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'flex-end',
+        flexWrap: 'wrap',
+        gap: '12px',
+        paddingTop: '12px',
+        borderTop: '1px solid #F1F5F9',
+      }}
+    >
+      <div style={{ fontSize: '0.72rem', color: '#475569', lineHeight: 1.45, fontWeight: 600 }}>
+        <div><span style={{ color: textAccent, fontWeight: 800 }}>P :</span> {company.phone || '—'}</div>
+        <div><span style={{ color: textAccent, fontWeight: 800 }}>E :</span> {company.email || '—'}</div>
+        <div>
+          {[company.address, company.city, company.state].filter(Boolean).join(', ') || (
+            <span style={{ color: '#94A3B8', fontStyle: 'italic' }}>Address not configured</span>
+          )}
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', marginBottom: '6px' }}>
+        <span style={{ fontSize: '0.96rem', fontWeight: 900, color: '#0F172A', letterSpacing: '-0.01em' }}>
+          Thank you for your Business!
+        </span>
+      </div>
+
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'flex-end',
+          width: '165px',
+          textAlign: 'center',
+        }}
+      >
+        <div
+          style={{
+            minHeight: '52px',
+            width: '100%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            marginBottom: '4px',
+          }}
+        >
+          {company.signatureUrl ? (
+            <img
+              src={company.signatureUrl}
+              alt="Authorized Signature"
+              style={{
+                maxHeight: '54px',
+                maxWidth: '150px',
+                objectFit: 'contain',
+                mixBlendMode: 'multiply',
+                display: 'block',
+                margin: '0 auto',
+              }}
+            />
+          ) : (
+            <ExecutiveSignatureSvg color="#0F172A" width={140} height={46} />
+          )}
+        </div>
+
+        <div
+          style={{
+            borderTop: '2px solid #0F172A',
+            paddingTop: '4px',
+            width: '100%',
+            textAlign: 'center',
+          }}
+        >
+          <div style={{ fontSize: '0.92rem', fontWeight: 900, color: '#0F172A', lineHeight: 1.2 }}>
+            {company.authorizedSignatoryName || 'Authorized Signatory'}
+          </div>
+          <div style={{ fontSize: '0.74rem', color: '#1E293B', fontWeight: 700, marginTop: '2px' }}>
+            {company.authorizedSignatoryDesignation || 'COO'}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
