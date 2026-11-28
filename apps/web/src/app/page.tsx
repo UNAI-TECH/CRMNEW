@@ -3,7 +3,8 @@
 import React, { useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Building2, Zap, Car, ShieldCheck, ArrowRight } from 'lucide-react';
+import { Building2, Zap, Car, ShieldCheck, ArrowRight, UserCheck } from 'lucide-react';
+import { PwaInstallButton } from '@/components/pwa/PwaInstallControl';
 
 export default function WelcomeLandingPage() {
   const router = useRouter();
@@ -40,12 +41,74 @@ export default function WelcomeLandingPage() {
         flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
-        padding: '2.5rem 1.5rem',
+        padding: '4.25rem 1.5rem 2.5rem',
         position: 'relative',
         boxSizing: 'border-box',
         overflow: 'hidden',
       }}
     >
+      {/* Top-Right Action Bar: Employee Login + PWA Install Icon */}
+      <div
+        style={{
+          position: 'fixed',
+          top: '16px',
+          right: '18px',
+          zIndex: 60,
+          display: 'flex',
+          alignItems: 'center',
+          gap: '10px',
+        }}
+      >
+        <Link
+          href="/emplogin"
+          id="employee-login-btn"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '7px',
+            height: '38px',
+            padding: '0 16px',
+            borderRadius: '999px',
+            backgroundColor: 'rgba(255, 255, 255, 0.94)',
+            backdropFilter: 'blur(8px)',
+            border: '1px solid rgba(98, 83, 248, 0.22)',
+            color: '#6253F8',
+            fontSize: '0.82rem',
+            fontWeight: 700,
+            textDecoration: 'none',
+            boxShadow: '0 6px 18px rgba(98, 83, 248, 0.12)',
+            transition: 'all 0.18s ease',
+            whiteSpace: 'nowrap',
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.backgroundColor = '#F3F0FF';
+            e.currentTarget.style.borderColor = 'rgba(98, 83, 248, 0.42)';
+            e.currentTarget.style.transform = 'translateY(-1px)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.94)';
+            e.currentTarget.style.borderColor = 'rgba(98, 83, 248, 0.22)';
+            e.currentTarget.style.transform = 'translateY(0)';
+          }}
+        >
+          <UserCheck size={15} />
+          <span>Employee Login</span>
+        </Link>
+
+        <PwaInstallButton
+          variant="circle"
+          buttonStyle={{
+            width: '38px',
+            height: '38px',
+            backgroundColor: 'rgba(255, 255, 255, 0.94)',
+            backdropFilter: 'blur(8px)',
+            border: '1px solid rgba(98, 83, 248, 0.22)',
+            color: '#6253F8',
+            boxShadow: '0 6px 18px rgba(98, 83, 248, 0.14)',
+          }}
+        />
+      </div>
       {/* Decorative ambient subtle circle blur */}
       <div
         style={{
@@ -293,6 +356,26 @@ export default function WelcomeLandingPage() {
           >
             Already registered? <span style={{ color: '#6253F8', fontWeight: 700 }}>Sign in to your workspace →</span>
           </Link>
+
+          <div
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '10px',
+              marginTop: '6px',
+              fontSize: '0.78rem',
+              color: '#94A3B8',
+              fontWeight: 600,
+            }}
+          >
+            <Link href="/privacy" style={{ color: '#64748B', textDecoration: 'none' }}>
+              Privacy Policy
+            </Link>
+            <span aria-hidden="true">&middot;</span>
+            <Link href="/terms" style={{ color: '#64748B', textDecoration: 'none' }}>
+              Terms of Service
+            </Link>
+          </div>
         </div>
       </div>
     </div>

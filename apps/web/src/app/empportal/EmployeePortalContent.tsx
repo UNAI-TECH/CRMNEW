@@ -7,7 +7,9 @@ import { useAuth, getUserSession, saveUserSession } from '@/lib/client/auth-cont
 import {
   getEmployees,
   fetchEmployees,
-  addLeaveRecord,
+  submitEmployeeLeaveRequest,
+  normalizeLeaveBalance,
+  computeRemainingLeaveDays,
   Employee,
   LeaveRecord,
 } from '@/lib/client/stores/employee-store';
@@ -48,6 +50,7 @@ export default function EmployeePortalContent({ initialEmployee }: { initialEmpl
   const [vehicles, setVehicles] = useState<any[]>([]);
   const [deals, setDeals] = useState<any[]>([]);
   const [isLeaveModalOpen, setIsLeaveModalOpen] = useState(false);
+  const [isSubmittingLeave, setIsSubmittingLeave] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // Leave Request Form State
@@ -165,11 +168,7 @@ export default function EmployeePortalContent({ initialEmployee }: { initialEmpl
         designation: found.designation || session?.designation || initialEmployee?.designation || 'Staff Member',
         department: found.department || session?.department || initialEmployee?.department || 'Sales',
         branch: found.branch || session?.branch || initialEmployee?.branch || 'Main Showroom',
-        leaveBalance: found.leaveBalance || {
-          casual: { total: 12, used: 0 },
-          sick: { total: 7, used: 0 },
-          paid: { total: 18, used: 0 },
-        },
+        leaveBalance: normalizeLeaveBalance(found.leaveBalance),
         accessControl: found.accessControl || session?.accessControl || initialEmployee?.accessControl || {
           pipeline: true,
           customers: true,
@@ -244,46 +243,56 @@ export default function EmployeePortalContent({ initialEmployee }: { initialEmpl
     });
   }, [testDrives, currentEmp, empNameLower]);
 
-  const totalLeaveAvailable =
-    (currentEmp.leaveBalance?.casual.total || 12) -
-    (currentEmp.leaveBalance?.casual.used || 0) +
-    ((currentEmp.leaveBalance?.sick.total || 7) - (currentEmp.leaveBalance?.sick.used || 0)) +
-    ((currentEmp.leaveBalance?.paid.total || 18) - (currentEmp.leaveBalance?.paid.used || 0));
+  const totalLeaveAvailable = computeRemainingLeaveDays(currentEmp.leaveBalance);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3200);
   };
 
-  const handleApplyLeave = (e: React.FormEvent) => {
+  const handleApplyLeave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!leaveForm.reason.trim()) {
       showToast('Please provide a reason for your leave request.');
       return;
     }
+    if (new Date(leaveForm.startDate) > new Date(leaveForm.endDate)) {
+      showToast('Leave start date cannot be later than end date.');
+      return;
+    }
 
-    const success = addLeaveRecord(currentEmp.id, {
-      leaveType: leaveForm.leaveType,
-      startDate: leaveForm.startDate,
-      endDate: leaveForm.endDate,
-      days: Number(leaveForm.days) || 1,
-      reason: leaveForm.reason.trim(),
-      status: 'pending',
-    });
-
-    if (success) {
-      setEmployees(getEmployees());
-      setIsLeaveModalOpen(false);
-      showToast('Leave request submitted successfully for supervisor approval.');
-      setLeaveForm({
-        leaveType: 'casual',
-        startDate: new Date().toISOString().split('T')[0],
-        endDate: new Date(Date.now() + 86400000).toISOString().split('T')[0],
-        days: 1,
-        reason: '',
+    setIsSubmittingLeave(true);
+    try {
+      const result = await submitEmployeeLeaveRequest(currentEmp.id, {
+        leaveType: leaveForm.leaveType,
+        startDate: leaveForm.startDate,
+        endDate: leaveForm.endDate,
+        days: Number(leaveForm.days) || 1,
+        reason: leaveForm.reason.trim(),
+        status: 'pending',
       });
-    } else {
-      showToast('Failed to record leave request. Please contact your manager.');
+
+      if (result.success) {
+        setEmployees(getEmployees());
+        fetchEmployees()
+          .then((fresh) => {
+            if (Array.isArray(fresh) && fresh.length > 0) setEmployees(fresh);
+          })
+          .catch(() => {});
+        setIsLeaveModalOpen(false);
+        showToast('Leave request sent to your administrator for approval.');
+        setLeaveForm({
+          leaveType: 'casual',
+          startDate: new Date().toISOString().split('T')[0],
+          endDate: new Date(Date.now() + 86400000).toISOString().split('T')[0],
+          days: 1,
+          reason: '',
+        });
+      } else {
+        showToast(result.error || 'Failed to submit leave request. Please try again.');
+      }
+    } finally {
+      setIsSubmittingLeave(false);
     }
   };
 
@@ -1150,7 +1159,7 @@ export default function EmployeePortalContent({ initialEmployee }: { initialEmpl
             </select>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+          <div className="emp-modal-grid-2">
             <div>
               <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, color: '#1E293B', marginBottom: '6px' }}>
                 Start Date
@@ -1264,22 +1273,23 @@ export default function EmployeePortalContent({ initialEmployee }: { initialEmpl
 
             <button
               type="submit"
+              disabled={isSubmittingLeave}
               style={{
                 padding: '10px 24px',
                 borderRadius: '10px',
-                backgroundColor: '#4F46E5',
+                backgroundColor: isSubmittingLeave ? '#818CF8' : '#4F46E5',
                 color: '#FFFFFF',
                 fontSize: '0.84rem',
                 fontWeight: 700,
                 border: 'none',
-                cursor: 'pointer',
+                cursor: isSubmittingLeave ? 'not-allowed' : 'pointer',
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: '6px',
               }}
             >
               <Send size={14} />
-              <span>Submit Request</span>
+              <span>{isSubmittingLeave ? 'Sending...' : 'Submit Request'}</span>
             </button>
           </div>
         </form>

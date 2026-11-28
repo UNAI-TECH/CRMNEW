@@ -25,7 +25,9 @@ import {
   updateEmployee,
   updateEmployeePassword,
   updateEmployeeAccessControl,
-  addLeaveRecord,
+  submitEmployeeLeaveRequest,
+  reviewEmployeeLeaveRequest,
+  normalizeLeaveBalance,
   deleteEmployee,
   Employee,
   EmployeeAccessControl,
@@ -463,11 +465,11 @@ export default function SettingsPage() {
   };
 
   // Submit Leave
-  const handleApplyLeave = (e: React.FormEvent) => {
+  const handleApplyLeave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedEmployeeForLeave) return;
 
-    addLeaveRecord(selectedEmployeeForLeave.id, {
+    const result = await submitEmployeeLeaveRequest(selectedEmployeeForLeave.id, {
       leaveType: newLeaveForm.leaveType,
       startDate: newLeaveForm.startDate,
       endDate: newLeaveForm.endDate,
@@ -477,10 +479,35 @@ export default function SettingsPage() {
       approvedBy: 'Tenant Admin',
     });
 
-    // Refresh selected employee
-    const updated = getEmployees().find((e) => e.id === selectedEmployeeForLeave.id);
-    setSelectedEmployeeForLeave(updated || null);
-    showToast(`Leave recorded for ${selectedEmployeeForLeave.fullName}!`);
+    if (result.success) {
+      const updated = getEmployees().find((e) => e.id === selectedEmployeeForLeave.id);
+      setSelectedEmployeeForLeave(updated || null);
+      showToast(`Leave recorded for ${selectedEmployeeForLeave.fullName}!`);
+    } else {
+      showToast(result.error || 'Failed to record leave.');
+    }
+  };
+
+  const handleSettingsLeaveDecision = async (leaveRecordId: string, approved: boolean) => {
+    if (!selectedEmployeeForLeave) return;
+    const status = approved ? 'approved' : 'rejected';
+    const result = await reviewEmployeeLeaveRequest(
+      selectedEmployeeForLeave.id,
+      leaveRecordId,
+      status,
+      'Administrator'
+    );
+    if (result.success) {
+      const updated = getEmployees().find((e) => e.id === selectedEmployeeForLeave.id);
+      setSelectedEmployeeForLeave(updated || null);
+      showToast(
+        approved
+          ? `Leave request accepted for ${selectedEmployeeForLeave.fullName}!`
+          : `Leave request rejected for ${selectedEmployeeForLeave.fullName}.`
+      );
+    } else {
+      showToast(result.error || 'Failed to update leave request.');
+    }
   };
 
   // Toggle Access Control section
@@ -686,6 +713,7 @@ export default function SettingsPage() {
           <p className="page-desc">
             <WordFadeIn
               text="Modular dealership configuration, plugin in/out section switches, employee credentials, leave management, and test drive operations."
+              mobileText="Modules, staff & setup"
               baseDelay={0.18}
               staggerDelay={0.025}
             />
@@ -2210,37 +2238,42 @@ export default function SettingsPage() {
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             {/* Balance Summary Row */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
-              <div style={{ padding: '10px', backgroundColor: '#EFF6FF', borderRadius: '10px', border: '1px solid #BFDBFE' }}>
-                <span style={{ fontSize: '0.74rem', color: '#1E40AF', fontWeight: 700 }}>CASUAL LEAVE</span>
-                <div style={{ fontSize: '1.2rem', fontWeight: 900, color: '#1E3A8A', marginTop: '2px' }}>
-                  {selectedEmployeeForLeave.leaveBalance.casual.total - selectedEmployeeForLeave.leaveBalance.casual.used} Days Left
-                </div>
-                <div style={{ fontSize: '0.7rem', color: '#64748B' }}>
-                  Used: {selectedEmployeeForLeave.leaveBalance.casual.used} of {selectedEmployeeForLeave.leaveBalance.casual.total}
-                </div>
-              </div>
+            {(() => {
+              const lb = normalizeLeaveBalance(selectedEmployeeForLeave.leaveBalance);
+              return (
+                <div className="emp-leave-cards-grid">
+                  <div style={{ padding: '10px', backgroundColor: '#EFF6FF', borderRadius: '10px', border: '1px solid #BFDBFE' }}>
+                    <span style={{ fontSize: '0.74rem', color: '#1E40AF', fontWeight: 700 }}>CASUAL LEAVE</span>
+                    <div style={{ fontSize: '1.2rem', fontWeight: 900, color: '#1E3A8A', marginTop: '2px' }}>
+                      {Math.max(0, lb.casual.total - lb.casual.used)} Days Left
+                    </div>
+                    <div style={{ fontSize: '0.7rem', color: '#64748B' }}>
+                      Used: {lb.casual.used} of {lb.casual.total}
+                    </div>
+                  </div>
 
-              <div style={{ padding: '10px', backgroundColor: '#FEF3C7', borderRadius: '10px', border: '1px solid #FDE68A' }}>
-                <span style={{ fontSize: '0.74rem', color: '#92400E', fontWeight: 700 }}>SICK LEAVE</span>
-                <div style={{ fontSize: '1.2rem', fontWeight: 900, color: '#78350F', marginTop: '2px' }}>
-                  {selectedEmployeeForLeave.leaveBalance.sick.total - selectedEmployeeForLeave.leaveBalance.sick.used} Days Left
-                </div>
-                <div style={{ fontSize: '0.7rem', color: '#64748B' }}>
-                  Used: {selectedEmployeeForLeave.leaveBalance.sick.used} of {selectedEmployeeForLeave.leaveBalance.sick.total}
-                </div>
-              </div>
+                  <div style={{ padding: '10px', backgroundColor: '#FEF3C7', borderRadius: '10px', border: '1px solid #FDE68A' }}>
+                    <span style={{ fontSize: '0.74rem', color: '#92400E', fontWeight: 700 }}>SICK LEAVE</span>
+                    <div style={{ fontSize: '1.2rem', fontWeight: 900, color: '#78350F', marginTop: '2px' }}>
+                      {Math.max(0, lb.sick.total - lb.sick.used)} Days Left
+                    </div>
+                    <div style={{ fontSize: '0.7rem', color: '#64748B' }}>
+                      Used: {lb.sick.used} of {lb.sick.total}
+                    </div>
+                  </div>
 
-              <div style={{ padding: '10px', backgroundColor: '#E6F4EF', borderRadius: '10px', border: '1px solid #BBF7D0' }}>
-                <span style={{ fontSize: '0.74rem', color: '#166534', fontWeight: 700 }}>PAID / ANNUAL LEAVE</span>
-                <div style={{ fontSize: '1.2rem', fontWeight: 900, color: '#14532D', marginTop: '2px' }}>
-                  {selectedEmployeeForLeave.leaveBalance.paid.total - selectedEmployeeForLeave.leaveBalance.paid.used} Days Left
+                  <div style={{ padding: '10px', backgroundColor: '#E6F4EF', borderRadius: '10px', border: '1px solid #BBF7D0' }}>
+                    <span style={{ fontSize: '0.74rem', color: '#166534', fontWeight: 700 }}>PAID / ANNUAL LEAVE</span>
+                    <div style={{ fontSize: '1.2rem', fontWeight: 900, color: '#14532D', marginTop: '2px' }}>
+                      {Math.max(0, lb.paid.total - lb.paid.used)} Days Left
+                    </div>
+                    <div style={{ fontSize: '0.7rem', color: '#64748B' }}>
+                      Used: {lb.paid.used} of {lb.paid.total}
+                    </div>
+                  </div>
                 </div>
-                <div style={{ fontSize: '0.7rem', color: '#64748B' }}>
-                  Used: {selectedEmployeeForLeave.leaveBalance.paid.used} of {selectedEmployeeForLeave.leaveBalance.paid.total}
-                </div>
-              </div>
-            </div>
+              );
+            })()}
 
             {/* Leave Application Form */}
             <form
@@ -2329,8 +2362,8 @@ export default function SettingsPage() {
                   No leave records logged yet for this employee.
                 </div>
               ) : (
-                <div style={{ border: '1px solid #E2E8F0', borderRadius: '10px', overflow: 'hidden' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
+                <div className="emp-table-scroll-wrap">
+                  <table style={{ width: '100%', minWidth: '580px', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
                     <thead>
                       <tr style={{ backgroundColor: '#F8FAFC', borderBottom: '1px solid #E2E8F0', color: '#64748B', textAlign: 'left' }}>
                         <th style={{ padding: '8px 12px' }}>Leave Type</th>
@@ -2338,6 +2371,7 @@ export default function SettingsPage() {
                         <th style={{ padding: '8px 12px' }}>Reason</th>
                         <th style={{ padding: '8px 12px' }}>Applied On</th>
                         <th style={{ padding: '8px 12px' }}>Status</th>
+                        <th style={{ padding: '8px 12px', textAlign: 'right' }}>Action</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -2362,12 +2396,54 @@ export default function SettingsPage() {
                                 fontWeight: 800,
                                 padding: '2px 8px',
                                 borderRadius: '6px',
-                                background: lh.status === 'approved' ? '#E6F4EF' : '#FEF3C7',
-                                color: lh.status === 'approved' ? '#16A34A' : '#B45309',
+                                background: lh.status === 'approved' ? '#E6F4EF' : lh.status === 'rejected' ? '#FEF2F2' : '#FEF3C7',
+                                color: lh.status === 'approved' ? '#16A34A' : lh.status === 'rejected' ? '#DC2626' : '#B45309',
                               }}
                             >
                               {lh.status.toUpperCase()}
                             </span>
+                          </td>
+                          <td style={{ padding: '10px 12px', textAlign: 'right' }}>
+                            {lh.status === 'pending' ? (
+                              <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                                <button
+                                  type="button"
+                                  onClick={() => handleSettingsLeaveDecision(lh.id, true)}
+                                  style={{
+                                    padding: '4px 10px',
+                                    borderRadius: '6px',
+                                    backgroundColor: '#10B981',
+                                    color: '#FFFFFF',
+                                    fontSize: '0.72rem',
+                                    fontWeight: 700,
+                                    border: 'none',
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  Accept
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleSettingsLeaveDecision(lh.id, false)}
+                                  style={{
+                                    padding: '4px 10px',
+                                    borderRadius: '6px',
+                                    backgroundColor: '#FFFFFF',
+                                    color: '#DC2626',
+                                    border: '1px solid #FECACA',
+                                    fontSize: '0.72rem',
+                                    fontWeight: 700,
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  Reject
+                                </button>
+                              </div>
+                            ) : (
+                              <span style={{ fontSize: '0.72rem', color: '#64748B' }}>
+                                {lh.status === 'approved' ? `Approved by ${lh.approvedBy || 'Admin'}` : 'Declined'}
+                              </span>
+                            )}
                           </td>
                         </tr>
                       ))}
@@ -3031,31 +3107,36 @@ export default function SettingsPage() {
                   </button>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px', textAlign: 'center', marginTop: '4px' }}>
-                  <div style={{ background: '#F8FAFC', padding: '6px 4px', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
-                    <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#64748B' }}>CASUAL</div>
-                    <div style={{ fontSize: '1.05rem', fontWeight: 900, color: '#0F172A' }}>
-                      {selectedProfileCardEmp.leaveBalance.casual.total - selectedProfileCardEmp.leaveBalance.casual.used}
-                    </div>
-                    <div style={{ fontSize: '0.62rem', color: '#94A3B8' }}>of {selectedProfileCardEmp.leaveBalance.casual.total} left</div>
-                  </div>
+                {(() => {
+                  const lb = normalizeLeaveBalance(selectedProfileCardEmp.leaveBalance);
+                  return (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px', textAlign: 'center', marginTop: '4px' }}>
+                      <div style={{ background: '#F8FAFC', padding: '6px 4px', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
+                        <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#64748B' }}>CASUAL</div>
+                        <div style={{ fontSize: '1.05rem', fontWeight: 900, color: '#0F172A' }}>
+                          {Math.max(0, lb.casual.total - lb.casual.used)}
+                        </div>
+                        <div style={{ fontSize: '0.62rem', color: '#94A3B8' }}>of {lb.casual.total} left</div>
+                      </div>
 
-                  <div style={{ background: '#F8FAFC', padding: '6px 4px', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
-                    <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#64748B' }}>SICK</div>
-                    <div style={{ fontSize: '1.05rem', fontWeight: 900, color: '#0F172A' }}>
-                      {selectedProfileCardEmp.leaveBalance.sick.total - selectedProfileCardEmp.leaveBalance.sick.used}
-                    </div>
-                    <div style={{ fontSize: '0.62rem', color: '#94A3B8' }}>of {selectedProfileCardEmp.leaveBalance.sick.total} left</div>
-                  </div>
+                      <div style={{ background: '#F8FAFC', padding: '6px 4px', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
+                        <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#64748B' }}>SICK</div>
+                        <div style={{ fontSize: '1.05rem', fontWeight: 900, color: '#0F172A' }}>
+                          {Math.max(0, lb.sick.total - lb.sick.used)}
+                        </div>
+                        <div style={{ fontSize: '0.62rem', color: '#94A3B8' }}>of {lb.sick.total} left</div>
+                      </div>
 
-                  <div style={{ background: '#F8FAFC', padding: '6px 4px', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
-                    <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#64748B' }}>PAID</div>
-                    <div style={{ fontSize: '1.05rem', fontWeight: 900, color: '#0F172A' }}>
-                      {selectedProfileCardEmp.leaveBalance.paid.total - selectedProfileCardEmp.leaveBalance.paid.used}
+                      <div style={{ background: '#F8FAFC', padding: '6px 4px', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
+                        <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#64748B' }}>PAID</div>
+                        <div style={{ fontSize: '1.05rem', fontWeight: 900, color: '#0F172A' }}>
+                          {Math.max(0, lb.paid.total - lb.paid.used)}
+                        </div>
+                        <div style={{ fontSize: '0.62rem', color: '#94A3B8' }}>of {lb.paid.total} left</div>
+                      </div>
                     </div>
-                    <div style={{ fontSize: '0.62rem', color: '#94A3B8' }}>of {selectedProfileCardEmp.leaveBalance.paid.total} left</div>
-                  </div>
-                </div>
+                  );
+                })()}
               </div>
 
               {/* Card 4: Authorized CRM Sections */}

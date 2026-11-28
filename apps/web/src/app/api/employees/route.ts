@@ -3,6 +3,10 @@ import { supabaseAdmin, isServerSupabaseConfigured } from '@/lib/server/supabase
 import { requireAuth } from '@/lib/server/auth';
 import { ensureTenantAndBranch } from '@/lib/server/tenant';
 import { EmployeeCreateSchema } from '@crm/validators';
+import {
+  listTenantLeaveSnapshot,
+  normalizeLeaveAllocation,
+} from '@/lib/server/leave-notifications-store';
 
 async function getOrCreateTenantAndBranch(requestedTenantId: string): Promise<{ tenantId: string; branchId: string }> {
   const { primaryBranchId } = await ensureTenantAndBranch(requestedTenantId);
@@ -42,7 +46,27 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ data: [], error: error.message }, { status: 400 });
     }
 
-    const sanitizedRows = (data || []).map(({ password_hash: _ph, ...rest }: any) => rest);
+    const snapshot = await listTenantLeaveSnapshot(tenantId).catch(() => null);
+
+    const sanitizedRows = (data || []).map(({ password_hash: _ph, ...rest }: any) => {
+      const serverHistory = snapshot?.requestsByEmployee.get(rest.id);
+      const colHistory = Array.isArray(rest.leave_history) ? rest.leave_history : [];
+      const mergedMap = new Map<string, any>();
+      for (const item of [...colHistory, ...(serverHistory || [])]) {
+        if (item?.id) mergedMap.set(item.id, item);
+      }
+      const leaveHistory = Array.from(mergedMap.values()).sort((a, b) => {
+        const tA = Date.parse(a.createdAt || a.appliedOn || '') || 0;
+        const tB = Date.parse(b.createdAt || b.appliedOn || '') || 0;
+        return tB - tA;
+      });
+      const leaveBalance = snapshot?.balancesByEmployee.get(rest.id) || normalizeLeaveAllocation(rest.leave_balance);
+      return {
+        ...rest,
+        leave_history: leaveHistory,
+        leave_balance: leaveBalance,
+      };
+    });
 
     return NextResponse.json({
       data: sanitizedRows,

@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'unai-crm-pwa-v1';
+const CACHE_VERSION = 'unai-crm-pwa-v2';
 const CORE_PRECACHE_URLS = [
   '/offline.html',
   '/unai-logo.png',
@@ -38,17 +38,18 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
 
-  // Never cache authenticated API calls or auth endpoints
+  // Never intercept API calls, auth endpoints, Next dev HMR updates, or SW itself
   if (
     url.pathname.startsWith('/api/') ||
     url.pathname.startsWith('/auth/') ||
+    url.pathname.includes('hot-update') ||
     url.pathname === '/sw.js'
   ) {
     return;
   }
 
-  // Navigation requests: network-first so auth cookies & server renders stay fresh,
-  // with clean offline fallback page if completely disconnected.
+  // Navigation requests: always network-first so SSR HTML and auth state stay fresh,
+  // with clean offline fallback page if disconnected.
   if (request.mode === 'navigate') {
     event.respondWith(
       fetch(request).catch(async () => {
@@ -59,9 +60,15 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Immutable Next static chunks & branded media/icons: stale-while-revalidate
+  // In local dev (localhost / 127.0.0.1), never serve cached /_next/static/ JS/CSS chunks
+  // because Turbopack/Next dev reuses chunk paths across edits and stale client chunks cause hydration mismatches.
+  const isLocalDevHost =
+    url.hostname === 'localhost' ||
+    url.hostname === '127.0.0.1' ||
+    url.hostname.endsWith('.local');
+
   const isStaticAsset =
-    url.pathname.startsWith('/_next/static/') ||
+    (!isLocalDevHost && url.pathname.startsWith('/_next/static/')) ||
     url.pathname.startsWith('/icons/') ||
     url.pathname.startsWith('/images/') ||
     url.pathname === '/unai-logo.png' ||
@@ -88,4 +95,3 @@ self.addEventListener('fetch', (event) => {
     );
   }
 });
-

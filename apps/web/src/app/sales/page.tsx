@@ -61,8 +61,11 @@ export default function SalesOverviewPage() {
       >
         <div>
           <WordFadeIn text="Sales Operations & Revenue Hub" className="text-2xl font-bold tracking-tight text-gray-900" />
-          <p style={{ color: '#64748B', fontSize: '0.9rem', marginTop: '0.25rem' }}>
-            Unified command center for commercial vehicle deal negotiations, GST quotations, and delivery milestones.
+          <p className="page-desc" style={{ color: '#64748B', fontSize: '0.9rem', marginTop: '0.25rem' }}>
+            <span className="wordfade-desktop">
+              Unified command center for commercial vehicle deal negotiations, GST quotations, and delivery milestones.
+            </span>
+            <span className="wordfade-mobile">Deals, quotes &amp; revenue</span>
           </p>
         </div>
 

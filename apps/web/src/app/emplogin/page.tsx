@@ -15,7 +15,6 @@ import {
   ShieldCheck,
   Building2,
   KeyRound,
-  Sparkles,
   ArrowLeft,
   Check,
   X,
@@ -407,7 +406,7 @@ export default function EmployeeLoginPage() {
         }}
       >
         <Link
-          href="/login"
+          href="/"
           style={{
             display: 'inline-flex',
             alignItems: 'center',
@@ -424,7 +423,7 @@ export default function EmployeeLoginPage() {
             transition: 'all 0.15s ease',
           }}
         >
-          <ArrowLeft size={15} /> Back to Admin Login
+          <ArrowLeft size={15} /> Back
         </Link>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -1018,10 +1017,7 @@ export default function EmployeeLoginPage() {
                   {loading ? (
                     <span>Saving to Database...</span>
                   ) : (
-                    <>
-                      <Sparkles size={16} />
-                      <span>Save & Sign In</span>
-                    </>
+                    <span>Save &amp; Sign In</span>
                   )}
                 </button>
               </div>
@@ -1271,14 +1267,24 @@ export default function EmployeeLoginPage() {
             backgroundColor: '#F8FAFC',
             borderTop: '1px solid #F1F5F9',
             display: 'flex',
+            flexWrap: 'wrap',
             justifyContent: 'space-between',
             alignItems: 'center',
+            gap: '8px',
             fontSize: '0.76rem',
             color: '#64748B',
           }}
         >
-          <span>Dealership CRM Enterprise Edition</span>
-          <span>Security 256-bit Encrypted</span>
+          <span>UNAI CRM &middot; 256-bit Encrypted</span>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '10px', fontWeight: 600 }}>
+            <Link href="/privacy" style={{ color: '#4F46E5', textDecoration: 'none' }}>
+              Privacy Policy
+            </Link>
+            <span aria-hidden="true">&middot;</span>
+            <Link href="/terms" style={{ color: '#4F46E5', textDecoration: 'none' }}>
+              Terms of Service
+            </Link>
+          </div>
         </div>
       </div>
 

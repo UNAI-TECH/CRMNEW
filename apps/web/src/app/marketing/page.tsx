@@ -129,7 +129,10 @@ export default function MarketingPage() {
         <div>
           <h1 className="page-title">Marketing Campaigns & Referral Engine</h1>
           <p className="page-desc">
-            Automated WhatsApp broadcast sequences, festive promotions, lead attribution, and customer referral payouts.
+            <span className="wordfade-desktop">
+              Automated WhatsApp broadcast sequences, festive promotions, lead attribution, and customer referral payouts.
+            </span>
+            <span className="wordfade-mobile">Campaigns &amp; referrals</span>
           </p>
         </div>
         <button

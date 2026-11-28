@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/client/auth-context';
 import { supabase } from '@/lib/client/supabase';
 import { syncServerSession } from '@/lib/client/session-sync';
-import { Lock, User, ArrowRight, CheckCircle2, AlertCircle, Eye, EyeOff, ArrowLeft } from 'lucide-react';
+import { Lock, User, UserCheck, ArrowRight, CheckCircle2, AlertCircle, Eye, EyeOff, ArrowLeft } from 'lucide-react';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -621,8 +621,38 @@ export default function LoginPage() {
           </form>
         </div>
 
-        {/* Secondary Navigation Link to Onboarding */}
-        <div style={{ marginTop: '1.75rem', textAlign: 'center' }}>
+        {/* Secondary Navigation Link to Onboarding & Employee Portal */}
+        <div
+          style={{
+            marginTop: '1.5rem',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '10px',
+            textAlign: 'center',
+          }}
+        >
+          <Link
+            href="/emplogin"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '7px',
+              padding: '8px 18px',
+              borderRadius: '999px',
+              backgroundColor: '#FAF8FF',
+              border: '1.5px solid rgba(98, 83, 248, 0.22)',
+              color: '#6253F8',
+              fontSize: '0.82rem',
+              fontWeight: 700,
+              textDecoration: 'none',
+            }}
+          >
+            <UserCheck size={15} />
+            <span>Staff &amp; Employee Login</span>
+            <ArrowRight size={14} />
+          </Link>
+
           <Link
             href="/onboarding"
             style={{
@@ -661,6 +691,28 @@ export default function LoginPage() {
           >
             <ArrowLeft size={13} />
             <span>Back to Welcome Page</span>
+          </Link>
+        </div>
+
+        {/* Legal Links */}
+        <div
+          style={{
+            marginTop: '1rem',
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+            gap: '10px',
+            fontSize: '0.76rem',
+            color: '#94A3B8',
+            fontWeight: 600,
+          }}
+        >
+          <Link href="/privacy" style={{ color: '#64748B', textDecoration: 'none' }}>
+            Privacy Policy
+          </Link>
+          <span aria-hidden="true">&middot;</span>
+          <Link href="/terms" style={{ color: '#64748B', textDecoration: 'none' }}>
+            Terms of Service
           </Link>
         </div>
       </div>

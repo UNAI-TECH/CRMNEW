@@ -305,6 +305,7 @@ export default function DashboardPage() {
             <WordFadeIn
               key={brandDisplayName || 'workspace'}
               text={`${brandDisplayName ? `${brandDisplayName} · ` : ''}Real-time pipeline velocity, stockyard valuation & delivery gates`}
+              mobileText={`${brandDisplayName ? `${brandDisplayName} · ` : ''}Sales, stock & delivery`}
               baseDelay={0.18}
               staggerDelay={0.035}
             />

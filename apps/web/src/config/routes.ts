@@ -3,6 +3,10 @@ export const PUBLIC_PAGE_PREFIXES = [
   '/emplogin',
   '/onboarding',
   '/auth',
+  '/privacy',
+  '/privacy-policy',
+  '/terms',
+  '/terms-of-service',
   '/_next',
   '/api/auth',
   '/api/employees/auth',
@@ -16,6 +20,10 @@ export const STANDALONE_SHELL_PREFIXES = [
   '/login',
   '/emplogin',
   '/auth',
+  '/privacy',
+  '/privacy-policy',
+  '/terms',
+  '/terms-of-service',
 ] as const;
 
 export const PROTECTED_PAGE_PREFIXES = [

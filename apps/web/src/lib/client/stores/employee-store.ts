@@ -88,6 +88,54 @@ export function filterAssignableEmployees<
 
 import { supabase, isSupabaseConfigured } from '@/lib/client/supabase';
 import { getActiveTenantId, getScopedKey } from '@/lib/client/tenant-context';
+import {
+  pushLocalNotification,
+  updateLocalNotifications,
+} from '@/lib/client/stores/notification-store';
+
+export type EmployeeLeaveBalance = {
+  casual: { total: number; used: number };
+  sick: { total: number; used: number };
+  paid: { total: number; used: number };
+};
+
+export function createDefaultLeaveBalance(): EmployeeLeaveBalance {
+  return {
+    casual: { total: 12, used: 0 },
+    sick: { total: 7, used: 0 },
+    paid: { total: 18, used: 0 },
+  };
+}
+
+export function normalizeLeaveBalance(raw?: any): EmployeeLeaveBalance {
+  if (!raw || typeof raw !== 'object') return createDefaultLeaveBalance();
+  const cTot = Number(raw.casual?.total || 0);
+  const sTot = Number(raw.sick?.total || 0);
+  const pTot = Number(raw.paid?.total || 0);
+
+  if (cTot <= 0 && sTot <= 0 && pTot <= 0) {
+    return {
+      casual: { total: 12, used: Math.max(0, Number(raw.casual?.used || 0)) },
+      sick: { total: 7, used: Math.max(0, Number(raw.sick?.used || 0)) },
+      paid: { total: 18, used: Math.max(0, Number(raw.paid?.used || 0)) },
+    };
+  }
+
+  return {
+    casual: { total: Math.max(0, cTot || 12), used: Math.max(0, Number(raw.casual?.used || 0)) },
+    sick: { total: Math.max(0, sTot || 7), used: Math.max(0, Number(raw.sick?.used || 0)) },
+    paid: { total: Math.max(0, pTot || 18), used: Math.max(0, Number(raw.paid?.used || 0)) },
+  };
+}
+
+export function computeRemainingLeaveDays(balance?: any): number {
+  const b = normalizeLeaveBalance(balance);
+  return (
+    Math.max(0, b.casual.total - b.casual.used) +
+    Math.max(0, b.sick.total - b.sick.used) +
+    Math.max(0, b.paid.total - b.paid.used)
+  );
+}
 
 const BASE_STORAGE_KEY = 'crm_employees_v2';
 
@@ -217,19 +265,23 @@ export function getEmployees(): Employee[] {
           e.branch = '';
           modified = true;
         }
-        // Purge mock leave balances (12 casual, 7 sick, 18 paid) when no leave records exist
-        if (
-          e.leaveBalance &&
-          e.leaveBalance.casual?.total === 12 &&
-          e.leaveBalance.sick?.total === 7 &&
-          e.leaveBalance.paid?.total === 18 &&
-          (!e.leaveHistory || e.leaveHistory.length === 0)
-        ) {
-          e.leaveBalance = {
-            casual: { total: 0, used: 0 },
-            sick: { total: 0, used: 0 },
-            paid: { total: 0, used: 0 },
-          };
+        // Normalize legacy 0/0/0 leave balances to standard allocation
+        if (e.leaveBalance) {
+          const normalizedLb = normalizeLeaveBalance(e.leaveBalance);
+          if (
+            normalizedLb.casual.total !== e.leaveBalance.casual?.total ||
+            normalizedLb.sick.total !== e.leaveBalance.sick?.total ||
+            normalizedLb.paid.total !== e.leaveBalance.paid?.total
+          ) {
+            e.leaveBalance = normalizedLb;
+            modified = true;
+          }
+        } else {
+          e.leaveBalance = createDefaultLeaveBalance();
+          modified = true;
+        }
+        if (!Array.isArray(e.leaveHistory)) {
+          e.leaveHistory = [];
           modified = true;
         }
         // Correct access control for Accountant / Finance roles
@@ -336,13 +388,25 @@ export async function fetchEmployees(): Promise<Employee[]> {
             password: existing?.password || '',
             isPasswordSet: Boolean(row.is_password_set ?? existing?.isPasswordSet ?? false),
             avatarUrl: row.avatar_url || row.avatarUrl || existing?.avatarUrl || '',
-            leaveBalance: existing?.leaveBalance || {
-              casual: { total: 0, used: 0 },
-              sick: { total: 0, used: 0 },
-              paid: { total: 0, used: 0 },
-            },
-            leaveHistory: existing?.leaveHistory || [],
-            accessControl: existing?.accessControl || getRoleDefaultAccessControl(roleName, deptName, isAdm),
+            leaveBalance: normalizeLeaveBalance(row.leave_balance || row.leaveBalance || existing?.leaveBalance),
+            leaveHistory: (() => {
+              const remoteHist: LeaveRecord[] = Array.isArray(row.leave_history) ? row.leave_history : [];
+              const localHist: LeaveRecord[] = Array.isArray(existing?.leaveHistory) ? existing.leaveHistory : [];
+              if (remoteHist.length === 0) return localHist;
+              const byId = new Map<string, LeaveRecord>();
+              for (const r of localHist) {
+                if (r?.id) byId.set(r.id, r);
+              }
+              for (const r of remoteHist) {
+                if (r?.id) byId.set(r.id, r);
+              }
+              return Array.from(byId.values()).sort((a, b) => {
+                const tA = Date.parse(a.appliedOn || '') || 0;
+                const tB = Date.parse(b.appliedOn || '') || 0;
+                return tB - tA;
+              });
+            })(),
+            accessControl: existing?.accessControl || row.access_control || getRoleDefaultAccessControl(roleName, deptName, isAdm),
           };
         });
 
@@ -467,11 +531,7 @@ export function addEmployee(employeeData: Partial<Employee>): Employee {
     password: employeeData.password || '',
     isPasswordSet: false, // Staff creates their permanent password on 1st login
     avatarUrl: employeeData.avatarUrl || '',
-    leaveBalance: employeeData.leaveBalance || {
-      casual: { total: 0, used: 0 },
-      sick: { total: 0, used: 0 },
-      paid: { total: 0, used: 0 },
-    },
+    leaveBalance: normalizeLeaveBalance(employeeData.leaveBalance),
     leaveHistory: employeeData.leaveHistory || [],
     accessControl: employeeData.accessControl || getRoleDefaultAccessControl(resolvedRole, resolvedDept, isAdmin),
   };
@@ -789,7 +849,7 @@ export async function verifyEmployeeUserId(
             status: json.employee.isActive ? 'active' : 'inactive',
             password: '',
             isPasswordSet: json.employee.isPasswordSet,
-            leaveBalance: { casual: { total: 0, used: 0 }, sick: { total: 0, used: 0 }, paid: { total: 0, used: 0 } },
+            leaveBalance: normalizeLeaveBalance(json.employee.leaveBalance),
             leaveHistory: [],
             accessControl: getRoleDefaultAccessControl(json.employee.role, json.employee.department, false),
           };
@@ -904,27 +964,123 @@ export function updateEmployeeAccessControl(id: string, access: EmployeeAccessCo
   return true;
 }
 
-export function addLeaveRecord(employeeId: string, leave: Omit<LeaveRecord, 'id' | 'appliedOn'>): boolean {
+function applyLeaveUsedDelta(
+  balance: EmployeeLeaveBalance,
+  leaveType: LeaveRecord['leaveType'],
+  deltaDays: number
+): EmployeeLeaveBalance {
+  const b = normalizeLeaveBalance(balance);
+  if (leaveType === 'casual') b.casual.used = Math.max(0, b.casual.used + deltaDays);
+  if (leaveType === 'sick') b.sick.used = Math.max(0, b.sick.used + deltaDays);
+  if (leaveType === 'paid') b.paid.used = Math.max(0, b.paid.used + deltaDays);
+  return b;
+}
+
+function buildLocalLeaveRecord(
+  leave: Omit<LeaveRecord, 'id' | 'appliedOn'> & { id?: string; appliedOn?: string }
+): LeaveRecord {
+  return {
+    ...leave,
+    id: leave.id || `lv-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    appliedOn: leave.appliedOn || new Date().toISOString().split('T')[0],
+  };
+}
+
+export function addLeaveRecord(
+  employeeId: string,
+  leave: Omit<LeaveRecord, 'id' | 'appliedOn'> & { id?: string }
+): LeaveRecord | null {
   const current = getEmployees();
   const emp = current.find((e) => e.id === employeeId);
-  if (!emp) return false;
+  const newRecord = buildLocalLeaveRecord(leave);
 
-  const newRecord: LeaveRecord = {
-    ...leave,
-    id: 'lv-' + Date.now(),
-    appliedOn: new Date().toISOString().split('T')[0],
-  };
-
-  // Update used balance if approved
-  if (leave.status === 'approved') {
-    if (leave.leaveType === 'casual') emp.leaveBalance.casual.used += leave.days;
-    if (leave.leaveType === 'sick') emp.leaveBalance.sick.used += leave.days;
-    if (leave.leaveType === 'paid') emp.leaveBalance.paid.used += leave.days;
+  if (emp) {
+    emp.leaveBalance = normalizeLeaveBalance(emp.leaveBalance);
+    if (leave.status === 'approved') {
+      emp.leaveBalance = applyLeaveUsedDelta(emp.leaveBalance, leave.leaveType, Number(leave.days) || 0);
+    }
+    emp.leaveHistory = [newRecord, ...(emp.leaveHistory || []).filter((r) => r.id !== newRecord.id)];
+    saveEmployees(current);
   }
 
-  emp.leaveHistory.unshift(newRecord);
-  saveEmployees(current);
-  return true;
+  if (newRecord.status === 'pending' && emp) {
+    pushLocalNotification({
+      id: `notif-leave-req-${newRecord.id}`,
+      title: `Leave Request — ${emp.fullName}`,
+      message: `${emp.fullName}${emp.userId ? ` (${emp.userId})` : ''} applied for ${newRecord.days} ${newRecord.days === 1 ? 'day' : 'days'} ${newRecord.leaveType} leave (${newRecord.startDate} to ${newRecord.endDate}): "${newRecord.reason}"`,
+      category: 'leave_request',
+      timestamp: 'Just now',
+      createdAt: new Date().toISOString(),
+      isRead: false,
+      linkHref: `/employees?leaveEmployeeId=${encodeURIComponent(emp.id)}&leaveRequestId=${encodeURIComponent(newRecord.id)}`,
+      priority: 'high',
+      recipientRole: 'admin',
+      metadata: {
+        employeeId: emp.id,
+        employeeName: emp.fullName,
+        employeeUserId: emp.userId || emp.employeeCode,
+        leaveRecordId: newRecord.id,
+        leaveType: newRecord.leaveType,
+        startDate: newRecord.startDate,
+        endDate: newRecord.endDate,
+        days: newRecord.days,
+        reason: newRecord.reason,
+        status: 'pending',
+      },
+    });
+  }
+
+  return newRecord;
+}
+
+export async function submitEmployeeLeaveRequest(
+  employeeId: string,
+  leave: Omit<LeaveRecord, 'id' | 'appliedOn'>
+): Promise<{ success: boolean; record?: LeaveRecord; error?: string }> {
+  const recordId = `lv-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  const localRecord = addLeaveRecord(employeeId, { ...leave, id: recordId });
+
+  if (typeof window !== 'undefined') {
+    try {
+      const res = await fetch('/api/employees/leaves', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: recordId,
+          employeeId,
+          leaveType: leave.leaveType,
+          startDate: leave.startDate,
+          endDate: leave.endDate,
+          days: Number(leave.days) || 1,
+          reason: leave.reason,
+          status: leave.status,
+        }),
+      });
+
+      const json = await res.json().catch(() => ({}));
+      if (res.ok && json.success) {
+        const current = getEmployees();
+        const idx = current.findIndex((e) => e.id === employeeId);
+        if (idx !== -1) {
+          current[idx] = {
+            ...current[idx],
+            leaveBalance: normalizeLeaveBalance(json.leaveBalance || current[idx].leaveBalance),
+            leaveHistory: Array.isArray(json.leaveHistory) ? json.leaveHistory : current[idx].leaveHistory,
+          };
+          saveEmployees(current);
+        }
+        return { success: true, record: json.data || localRecord || undefined };
+      }
+
+      if (res.status >= 400 && res.status < 500 && res.status !== 401) {
+        return { success: false, error: json.error || 'Failed to submit leave request.' };
+      }
+    } catch (err: any) {
+      console.warn('[EmployeeStore] Leave POST sync warning:', err?.message || err);
+    }
+  }
+
+  return localRecord ? { success: true, record: localRecord } : { success: false, error: 'Failed to submit leave request.' };
 }
 
 export function updateLeaveRecordStatus(
@@ -937,28 +1093,90 @@ export function updateLeaveRecordStatus(
   const emp = current.find((e) => e.id === employeeId);
   if (!emp) return false;
 
-  const record = emp.leaveHistory.find((r) => r.id === leaveRecordId);
+  const record = (emp.leaveHistory || []).find((r) => r.id === leaveRecordId);
   if (!record) return false;
 
   const oldStatus = record.status;
   record.status = newStatus;
-  if (newStatus === 'approved') {
+  if (newStatus === 'approved' || newStatus === 'rejected') {
     record.approvedBy = approvedBy;
   }
 
-  // Adjust leave balance if moving into or out of 'approved' status
+  emp.leaveBalance = normalizeLeaveBalance(emp.leaveBalance);
   if (oldStatus !== 'approved' && newStatus === 'approved') {
-    if (record.leaveType === 'casual') emp.leaveBalance.casual.used += record.days;
-    if (record.leaveType === 'sick') emp.leaveBalance.sick.used += record.days;
-    if (record.leaveType === 'paid') emp.leaveBalance.paid.used += record.days;
+    emp.leaveBalance = applyLeaveUsedDelta(emp.leaveBalance, record.leaveType, Number(record.days) || 0);
   } else if (oldStatus === 'approved' && newStatus !== 'approved') {
-    if (record.leaveType === 'casual') emp.leaveBalance.casual.used = Math.max(0, emp.leaveBalance.casual.used - record.days);
-    if (record.leaveType === 'sick') emp.leaveBalance.sick.used = Math.max(0, emp.leaveBalance.sick.used - record.days);
-    if (record.leaveType === 'paid') emp.leaveBalance.paid.used = Math.max(0, emp.leaveBalance.paid.used - record.days);
+    emp.leaveBalance = applyLeaveUsedDelta(emp.leaveBalance, record.leaveType, -(Number(record.days) || 0));
   }
 
   saveEmployees(current);
+
+  updateLocalNotifications((prev) =>
+    prev.map((n) => {
+      if (n.id === `notif-leave-req-${leaveRecordId}` || n.metadata?.leaveRecordId === leaveRecordId) {
+        return {
+          ...n,
+          isRead: newStatus !== 'pending' ? true : n.isRead,
+          priority: newStatus === 'pending' ? 'high' : 'normal',
+          metadata: {
+            ...(n.metadata || {}),
+            status: newStatus,
+            approvedBy,
+          },
+        };
+      }
+      return n;
+    })
+  );
+
   return true;
+}
+
+export async function reviewEmployeeLeaveRequest(
+  employeeId: string,
+  leaveRecordId: string,
+  status: 'approved' | 'rejected' | 'pending',
+  approvedBy = 'Administrator'
+): Promise<{ success: boolean; error?: string }> {
+  const updatedLocally = updateLeaveRecordStatus(employeeId, leaveRecordId, status, approvedBy);
+
+  if (typeof window !== 'undefined') {
+    try {
+      const res = await fetch('/api/employees/leaves', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          employeeId,
+          leaveRecordId,
+          status,
+          approvedBy,
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (res.ok && json.success) {
+        const current = getEmployees();
+        const idx = current.findIndex((e) => e.id === employeeId);
+        if (idx !== -1) {
+          current[idx] = {
+            ...current[idx],
+            leaveBalance: normalizeLeaveBalance(json.leaveBalance || current[idx].leaveBalance),
+            leaveHistory: Array.isArray(json.leaveHistory) ? json.leaveHistory : current[idx].leaveHistory,
+          };
+          saveEmployees(current);
+        }
+        return { success: true };
+      }
+      if (!updatedLocally) {
+        return { success: false, error: json.error || 'Failed to update leave request.' };
+      }
+    } catch (err: any) {
+      if (!updatedLocally) {
+        return { success: false, error: err?.message || 'Failed to update leave request.' };
+      }
+    }
+  }
+
+  return updatedLocally ? { success: true } : { success: false, error: 'Failed to update leave record.' };
 }
 
 export function deleteEmployee(id: string): Employee[] {

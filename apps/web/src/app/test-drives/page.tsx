@@ -149,6 +149,7 @@ export default function TestDrivesPage() {
           <p className="page-desc">
             <WordFadeIn
               text="Vehicle allocation, driver license & KYC verification, staff pilots, live odometer tracking, and customer feedback."
+              mobileText="Drives, KYC & odometer"
               baseDelay={0.18}
               staggerDelay={0.025}
             />

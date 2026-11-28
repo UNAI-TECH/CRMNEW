@@ -50,23 +50,28 @@ import {
   compressDataUrl,
 } from '@/lib/client/stores/company-store';
 import { getUserSession, UserSession } from '@/lib/client/auth-context';
-import { getEmployees, EmployeeAccessControl } from '@/lib/client/stores/employee-store';
+import {
+  getEmployees,
+  reviewEmployeeLeaveRequest,
+  EmployeeAccessControl,
+} from '@/lib/client/stores/employee-store';
+import {
+  DealershipNotification,
+  getNotifications,
+  saveNotifications,
+  fetchNotifications,
+  markNotificationReadRemote,
+  markAllNotificationsReadRemote,
+  deleteNotificationRemote,
+  clearAllNotificationsRemote,
+} from '@/lib/client/stores/notification-store';
 import {
   isStandaloneShellPath,
   isWorkspaceContentPath,
   isStaffAllowedOnPath,
 } from '@/config/routes';
 
-export interface DealershipNotification {
-  id: string;
-  title: string;
-  message: string;
-  category: 'lead' | 'test_drive' | 'deal' | 'inventory' | 'customer';
-  timestamp: string;
-  isRead: boolean;
-  linkHref?: string;
-  priority?: 'normal' | 'high' | 'urgent';
-}
+export type { DealershipNotification };
 
 const DEFAULT_NOTIFICATIONS: DealershipNotification[] = [];
 
@@ -254,7 +259,8 @@ export function Shell({
     setModules(getModules());
     setCompany(getCompanyProfile());
 
-    const isStaff = pathname.startsWith('/empportal') || Boolean(activeSession?.employeeId && !activeSession?.isAdmin);
+    const sessNow = getUserSession();
+    const isStaff = pathname.startsWith('/empportal') || Boolean(sessNow?.employeeId && !sessNow?.isAdmin);
     const isStandalone = isStandaloneShellPath(pathname);
 
     // Only query remote Supabase module plugins for admin workspace sessions (never on staff portal or public login)
@@ -272,14 +278,16 @@ export function Shell({
       });
     }
 
-    try {
-      const savedNotifs = localStorage.getItem('crm_dealership_notifications_v1');
-      if (savedNotifs) {
-        setNotifications(JSON.parse(savedNotifs));
-      } else {
-        localStorage.setItem('crm_dealership_notifications_v1', JSON.stringify(DEFAULT_NOTIFICATIONS));
-      }
-    } catch {}
+    const syncLocalNotifs = () => {
+      setNotifications(getNotifications());
+    };
+    syncLocalNotifs();
+
+    if (!isStandalone) {
+      fetchNotifications().then((data) => {
+        if (Array.isArray(data)) setNotifications(data);
+      });
+    }
 
     const handleModulesChanged = () => {
       setModules(getModules());
@@ -291,6 +299,24 @@ export function Shell({
 
     const handleSessionChanged = () => {
       setSessionState(getUserSession());
+      if (!isStandaloneShellPath(pathname)) {
+        fetchNotifications().then((data) => {
+          if (Array.isArray(data)) setNotifications(data);
+        });
+      }
+    };
+
+    const handleNotificationsChanged = () => {
+      setNotifications(getNotifications());
+    };
+
+    const handleVisibilityOrFocus = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      if (!isStandaloneShellPath(pathname)) {
+        fetchNotifications().then((data) => {
+          if (Array.isArray(data)) setNotifications(data);
+        });
+      }
     };
 
     const handleStorage = (e: StorageEvent) => {
@@ -300,19 +326,38 @@ export function Shell({
       if (e.key === 'crm_active_user_session_v1') {
         setSessionState(getUserSession());
       }
+      if (e.key && e.key.startsWith('crm_dealership_notifications_v1')) {
+        syncLocalNotifs();
+      }
     };
 
     window.addEventListener('crm-modules-changed', handleModulesChanged);
     window.addEventListener('crm-company-profile-changed', handleCompanyChanged);
     window.addEventListener('crm-session-changed', handleSessionChanged);
+    window.addEventListener('crm-notifications-changed', handleNotificationsChanged);
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
     window.addEventListener('storage', handleStorage);
+
+    const pollTimer = !isStandalone
+      ? window.setInterval(() => {
+          fetchNotifications().then((data) => {
+            if (Array.isArray(data)) setNotifications(data);
+          });
+        }, 15000)
+      : undefined;
+
     return () => {
       window.removeEventListener('crm-modules-changed', handleModulesChanged);
       window.removeEventListener('crm-company-profile-changed', handleCompanyChanged);
       window.removeEventListener('crm-session-changed', handleSessionChanged);
+      window.removeEventListener('crm-notifications-changed', handleNotificationsChanged);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
       window.removeEventListener('storage', handleStorage);
+      if (pollTimer) window.clearInterval(pollTimer);
     };
-  }, []);
+  }, [pathname]);
 
   // Save current active page to localStorage so page refresh or login preserves it
   useEffect(() => {
@@ -558,24 +603,27 @@ export function Shell({
 
   // Notifications helpers
   const unreadNotifCount = notifications.filter((n) => !n.isRead).length;
+  const [notifActionBusyId, setNotifActionBusyId] = useState<string | null>(null);
 
   const markAllNotifsAsRead = () => {
     setNotifications((prev) => {
       const updated = prev.map((n) => ({ ...n, isRead: true }));
-      try {
-        localStorage.setItem('crm_dealership_notifications_v1', JSON.stringify(updated));
-      } catch (e) {}
+      saveNotifications(updated);
       return updated;
+    });
+    markAllNotificationsReadRemote().then((fresh) => {
+      if (fresh) setNotifications(fresh);
     });
   };
 
   const markNotifAsRead = (id: string) => {
     setNotifications((prev) => {
       const updated = prev.map((n) => (n.id === id ? { ...n, isRead: true } : n));
-      try {
-        localStorage.setItem('crm_dealership_notifications_v1', JSON.stringify(updated));
-      } catch (e) {}
+      saveNotifications(updated);
       return updated;
+    });
+    markNotificationReadRemote(id).then((fresh) => {
+      if (fresh) setNotifications(fresh);
     });
   };
 
@@ -583,24 +631,56 @@ export function Shell({
     e.stopPropagation();
     setNotifications((prev) => {
       const updated = prev.filter((n) => n.id !== id);
-      try {
-        localStorage.setItem('crm_dealership_notifications_v1', JSON.stringify(updated));
-      } catch (e) {}
+      saveNotifications(updated);
       return updated;
+    });
+    deleteNotificationRemote(id).then((fresh) => {
+      if (fresh) setNotifications(fresh);
     });
   };
 
   const clearAllNotifs = () => {
     setNotifications([]);
-    try {
-      localStorage.setItem('crm_dealership_notifications_v1', JSON.stringify([]));
-    } catch (e) {}
+    saveNotifications([]);
+    clearAllNotificationsRemote().then((fresh) => {
+      if (fresh) setNotifications(fresh);
+    });
+  };
+
+  const handleLeaveNotifDecision = async (
+    e: React.MouseEvent,
+    item: DealershipNotification,
+    approved: boolean
+  ) => {
+    e.stopPropagation();
+    const employeeId = item.metadata?.employeeId;
+    const leaveRecordId = item.metadata?.leaveRecordId;
+    if (!employeeId || !leaveRecordId) return;
+
+    setNotifActionBusyId(item.id);
+    const approver = userDisplayName || 'Administrator';
+    await reviewEmployeeLeaveRequest(
+      String(employeeId),
+      String(leaveRecordId),
+      approved ? 'approved' : 'rejected',
+      approver
+    );
+    const fresh = await fetchNotifications();
+    if (fresh) setNotifications(fresh);
+    setNotifActionBusyId(null);
   };
 
   const handleNotifClick = (item: DealershipNotification) => {
     markNotifAsRead(item.id);
     setNotificationsOpen(false);
     if (item.linkHref) {
+      if (pathname === '/employees' && item.metadata?.employeeId && typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('crm-open-employee-leave', {
+            detail: { employeeId: item.metadata.employeeId },
+          })
+        );
+      }
       router.push(item.linkHref);
     }
   };
@@ -610,6 +690,42 @@ export function Shell({
 
   const renderNotifCategoryIcon = (category: DealershipNotification['category']) => {
     switch (category) {
+      case 'leave_request':
+        return (
+          <div
+            style={{
+              width: '32px',
+              height: '32px',
+              borderRadius: '50%',
+              backgroundColor: '#EEF2FF',
+              border: '1px solid #C7D2FE',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+            }}
+          >
+            <Calendar size={15} style={{ color: '#4F46E5' }} />
+          </div>
+        );
+      case 'leave_status':
+        return (
+          <div
+            style={{
+              width: '32px',
+              height: '32px',
+              borderRadius: '50%',
+              backgroundColor: '#ECFDF5',
+              border: '1px solid #A7F3D0',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+            }}
+          >
+            <CheckCircle2 size={15} style={{ color: '#059669' }} />
+          </div>
+        );
       case 'lead':
         return (
           <div
@@ -720,7 +836,7 @@ export function Shell({
 
   // Full-screen standalone layout for Welcome Landing (/), Onboarding, Login, Employee Login (/emplogin), and Auth (/auth/*)
   if (isStandaloneShellPath(pathname)) {
-    const showFloatingInstall = pathname === '/' || pathname === '/login' || pathname?.startsWith('/login/');
+    const showFloatingInstall = pathname === '/login' || pathname?.startsWith('/login/');
     return (
       <div className="app-shell" style={{ display: 'block', minHeight: '100vh', width: '100%' }}>
         {showFloatingInstall && <PwaInstallButton variant="floating" />}
@@ -805,8 +921,14 @@ export function Shell({
             <div style={{ position: 'relative' }}>
               <button
                 onClick={() => {
-                  setNotificationsOpen(!notificationsOpen);
+                  const nextOpen = !notificationsOpen;
+                  setNotificationsOpen(nextOpen);
                   setProfileDropdownOpen(false);
+                  if (nextOpen && !isStandaloneShellPath(pathname)) {
+                    fetchNotifications().then((data) => {
+                      if (Array.isArray(data)) setNotifications(data);
+                    });
+                  }
                 }}
                 className="icon-circle-btn"
                 title="Dealership Alerts & Notifications"
@@ -846,23 +968,7 @@ export function Shell({
 
               {/* Notifications Popover Dropdown */}
               {notificationsOpen && (
-                <div
-                  style={{
-                    position: 'absolute',
-                    top: 'calc(100% + 8px)',
-                    right: 0,
-                    width: '380px',
-                    maxWidth: 'calc(100vw - 24px)',
-                    backgroundColor: 'var(--solid)',
-                    border: '1px solid var(--line-2)',
-                    borderRadius: 'var(--r-tile)',
-                    boxShadow: 'var(--shadow-pop)',
-                    zIndex: 75,
-                    overflow: 'hidden',
-                    display: 'flex',
-                    flexDirection: 'column',
-                  }}
-                >
+                <div className="crm-notif-popover">
                   {/* Notification Dropdown Header */}
                   <div
                     style={{
@@ -979,7 +1085,7 @@ export function Shell({
                   </div>
 
                   {/* Notification Items List */}
-                  <div style={{ maxHeight: '360px', overflowY: 'auto' }}>
+                  <div className="crm-notif-list">
                     {displayedNotifications.length === 0 ? (
                       <div style={{ padding: '36px 16px', textAlign: 'center' }}>
                         <CheckCircle2 size={32} style={{ color: '#10B981', margin: '0 auto 8px auto' }} />
@@ -989,140 +1095,226 @@ export function Shell({
                         <div style={{ fontSize: '0.76rem', color: 'var(--muted)', marginTop: '4px' }}>
                           {notifFilter === 'unread'
                             ? "You've read all your recent alerts."
-                            : 'New dealership leads, deals, and activity will show up here.'}
+                            : 'Leave requests, new leads, and dealership activity will show up here.'}
                         </div>
                       </div>
                     ) : (
-                      displayedNotifications.map((item) => (
-                        <div
-                          key={item.id}
-                          onClick={() => handleNotifClick(item)}
-                          style={{
-                            padding: '10px 12px',
-                            display: 'flex',
-                            gap: '10px',
-                            alignItems: 'flex-start',
-                            borderBottom: '1px solid var(--line)',
-                            backgroundColor: item.isRead ? 'transparent' : 'rgba(98, 83, 248, 0.04)',
-                            cursor: 'pointer',
-                            position: 'relative',
-                            transition: 'background-color 0.15s ease',
-                          }}
-                          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--float)')}
-                          onMouseLeave={(e) =>
-                            (e.currentTarget.style.backgroundColor = item.isRead ? 'transparent' : 'rgba(98, 83, 248, 0.04)')
-                          }
-                        >
-                          {/* Category Icon */}
-                          {renderNotifCategoryIcon(item.category)}
+                      displayedNotifications.map((item) => {
+                        const isLeaveReq = item.category === 'leave_request';
+                        const leaveStatus = item.metadata?.status;
+                        const canDecideLeave =
+                          isLeaveReq &&
+                          !isStaffEmployee &&
+                          (!leaveStatus || leaveStatus === 'pending') &&
+                          Boolean(item.metadata?.employeeId && item.metadata?.leaveRecordId);
 
-                          {/* Content Body */}
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px' }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
-                                {!item.isRead && (
+                        return (
+                          <div
+                            key={item.id}
+                            onClick={() => handleNotifClick(item)}
+                            style={{
+                              padding: '10px 12px',
+                              display: 'flex',
+                              gap: '10px',
+                              alignItems: 'flex-start',
+                              borderBottom: '1px solid var(--line)',
+                              backgroundColor: item.isRead ? 'transparent' : 'rgba(98, 83, 248, 0.04)',
+                              cursor: 'pointer',
+                              position: 'relative',
+                              transition: 'background-color 0.15s ease',
+                            }}
+                            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--float)')}
+                            onMouseLeave={(e) =>
+                              (e.currentTarget.style.backgroundColor = item.isRead ? 'transparent' : 'rgba(98, 83, 248, 0.04)')
+                            }
+                          >
+                            {/* Category Icon */}
+                            {renderNotifCategoryIcon(item.category)}
+
+                            {/* Content Body */}
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
+                                  {!item.isRead && (
+                                    <span
+                                      style={{
+                                        width: '6px',
+                                        height: '6px',
+                                        borderRadius: '50%',
+                                        backgroundColor: '#3B82F6',
+                                        flexShrink: 0,
+                                      }}
+                                    />
+                                  )}
                                   <span
                                     style={{
-                                      width: '6px',
-                                      height: '6px',
-                                      borderRadius: '50%',
-                                      backgroundColor: '#3B82F6',
+                                      fontWeight: item.isRead ? 600 : 700,
+                                      fontSize: '0.82rem',
+                                      color: 'var(--text)',
+                                      overflow: 'hidden',
+                                      textOverflow: 'ellipsis',
+                                      whiteSpace: 'nowrap',
+                                    }}
+                                  >
+                                    {item.title}
+                                  </span>
+                                </div>
+                                {item.priority === 'urgent' && (
+                                  <span
+                                    style={{
+                                      fontSize: '0.62rem',
+                                      fontWeight: 800,
+                                      padding: '1px 5px',
+                                      borderRadius: '4px',
+                                      backgroundColor: '#FEE2E2',
+                                      color: '#DC2626',
+                                      textTransform: 'uppercase',
                                       flexShrink: 0,
                                     }}
-                                  />
+                                  >
+                                    Urgent
+                                  </span>
                                 )}
-                                <span
-                                  style={{
-                                    fontWeight: item.isRead ? 600 : 700,
-                                    fontSize: '0.82rem',
-                                    color: 'var(--text)',
-                                    overflow: 'hidden',
-                                    textOverflow: 'ellipsis',
-                                    whiteSpace: 'nowrap',
-                                  }}
-                                >
-                                  {item.title}
-                                </span>
+                                {item.priority === 'high' && (
+                                  <span
+                                    style={{
+                                      fontSize: '0.62rem',
+                                      fontWeight: 800,
+                                      padding: '1px 5px',
+                                      borderRadius: '4px',
+                                      backgroundColor: '#FFEDD5',
+                                      color: '#EA580C',
+                                      textTransform: 'uppercase',
+                                      flexShrink: 0,
+                                    }}
+                                  >
+                                    Pending
+                                  </span>
+                                )}
                               </div>
-                              {item.priority === 'urgent' && (
-                                <span
-                                  style={{
-                                    fontSize: '0.62rem',
-                                    fontWeight: 800,
-                                    padding: '1px 5px',
-                                    borderRadius: '4px',
-                                    backgroundColor: '#FEE2E2',
-                                    color: '#DC2626',
-                                    textTransform: 'uppercase',
-                                    flexShrink: 0,
-                                  }}
-                                >
-                                  Urgent
-                                </span>
-                              )}
-                              {item.priority === 'high' && (
-                                <span
-                                  style={{
-                                    fontSize: '0.62rem',
-                                    fontWeight: 800,
-                                    padding: '1px 5px',
-                                    borderRadius: '4px',
-                                    backgroundColor: '#FFEDD5',
-                                    color: '#EA580C',
-                                    textTransform: 'uppercase',
-                                    flexShrink: 0,
-                                  }}
-                                >
-                                  High
-                                </span>
-                              )}
-                            </div>
 
-                            <div
-                              style={{
-                                fontSize: '0.74rem',
-                                color: 'var(--muted)',
-                                marginTop: '3px',
-                                lineHeight: '1.35',
-                              }}
-                            >
-                              {item.message}
-                            </div>
-
-                            <div
-                              style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'space-between',
-                                marginTop: '6px',
-                              }}
-                            >
-                              <span style={{ fontSize: '0.68rem', color: '#94A3B8', fontWeight: 600 }}>
-                                {item.timestamp}
-                              </span>
-                              <button
-                                type="button"
-                                onClick={(e) => deleteNotif(e, item.id)}
-                                title="Dismiss notification"
+                              <div
                                 style={{
-                                  background: 'none',
-                                  border: 'none',
-                                  cursor: 'pointer',
-                                  color: '#94A3B8',
-                                  padding: '2px',
+                                  fontSize: '0.74rem',
+                                  color: 'var(--muted)',
+                                  marginTop: '3px',
+                                  lineHeight: '1.35',
+                                  overflowWrap: 'anywhere',
+                                }}
+                              >
+                                {item.message}
+                              </div>
+
+                              {canDecideLeave && (
+                                <div
+                                  style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '6px',
+                                    marginTop: '8px',
+                                    flexWrap: 'wrap',
+                                  }}
+                                >
+                                  <button
+                                    type="button"
+                                    disabled={notifActionBusyId === item.id}
+                                    onClick={(e) => handleLeaveNotifDecision(e, item, true)}
+                                    style={{
+                                      padding: '4px 10px',
+                                      borderRadius: '7px',
+                                      backgroundColor: '#10B981',
+                                      color: '#FFFFFF',
+                                      border: 'none',
+                                      fontSize: '0.72rem',
+                                      fontWeight: 700,
+                                      cursor: 'pointer',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '4px',
+                                      whiteSpace: 'nowrap',
+                                    }}
+                                  >
+                                    <CheckCircle2 size={12} />
+                                    <span>Accept</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={notifActionBusyId === item.id}
+                                    onClick={(e) => handleLeaveNotifDecision(e, item, false)}
+                                    style={{
+                                      padding: '4px 10px',
+                                      borderRadius: '7px',
+                                      backgroundColor: '#FFFFFF',
+                                      color: '#DC2626',
+                                      border: '1px solid #FECACA',
+                                      fontSize: '0.72rem',
+                                      fontWeight: 700,
+                                      cursor: 'pointer',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '4px',
+                                      whiteSpace: 'nowrap',
+                                    }}
+                                  >
+                                    <X size={12} />
+                                    <span>Reject</span>
+                                  </button>
+                                </div>
+                              )}
+
+                              {isLeaveReq && leaveStatus && leaveStatus !== 'pending' && (
+                                <div style={{ marginTop: '6px' }}>
+                                  <span
+                                    style={{
+                                      fontSize: '0.68rem',
+                                      fontWeight: 700,
+                                      padding: '2px 7px',
+                                      borderRadius: '999px',
+                                      backgroundColor: leaveStatus === 'approved' ? '#ECFDF5' : '#FEF2F2',
+                                      color: leaveStatus === 'approved' ? '#059669' : '#DC2626',
+                                      textTransform: 'capitalize',
+                                    }}
+                                  >
+                                    {leaveStatus === 'approved' ? '✓ Accepted' : '✕ Rejected'}
+                                  </span>
+                                </div>
+                              )}
+
+                              <div
+                                style={{
                                   display: 'flex',
                                   alignItems: 'center',
-                                  borderRadius: '4px',
+                                  justifyContent: 'space-between',
+                                  marginTop: '6px',
                                 }}
-                                onMouseEnter={(e) => (e.currentTarget.style.color = '#EF4444')}
-                                onMouseLeave={(e) => (e.currentTarget.style.color = '#94A3B8')}
                               >
-                                <X size={13} />
-                              </button>
+                                <span style={{ fontSize: '0.68rem', color: '#94A3B8', fontWeight: 600 }}>
+                                  {item.timestamp}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={(e) => deleteNotif(e, item.id)}
+                                  title="Dismiss notification"
+                                  style={{
+                                    background: 'none',
+                                    border: 'none',
+                                    cursor: 'pointer',
+                                    color: '#94A3B8',
+                                    padding: '2px',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    borderRadius: '4px',
+                                  }}
+                                  onMouseEnter={(e) => (e.currentTarget.style.color = '#EF4444')}
+                                  onMouseLeave={(e) => (e.currentTarget.style.color = '#94A3B8')}
+                                >
+                                  <X size={13} />
+                                </button>
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      ))
+                        );
+                      })
                     )}
                   </div>
 
@@ -1197,20 +1389,7 @@ export function Shell({
 
               {/* Clean Profile Dropdown Menu */}
               {profileDropdownOpen && (
-                <div
-                  style={{
-                    position: 'absolute',
-                    top: 'calc(100% + 8px)',
-                    right: 0,
-                    width: '248px',
-                    backgroundColor: 'var(--solid)',
-                    border: '1px solid var(--line-2)',
-                    borderRadius: 'var(--r-tile)',
-                    boxShadow: 'var(--shadow-pop)',
-                    zIndex: 75,
-                    padding: '14px',
-                  }}
-                >
+                <div className="crm-profile-popover">
                   {/* User Profile Info Header (Clickable to view profile) */}
                   <div
                     onClick={() => {
@@ -1537,6 +1716,34 @@ export function Shell({
         <main key={pathname} className="page-transition-wrap">
           {children}
         </main>
+
+        {/* Subtle Legal & Compliance Footer across Workspace Pages (hidden on print/invoices) */}
+        <footer
+          className="no-print"
+          style={{
+            marginTop: '36px',
+            paddingTop: '16px',
+            borderTop: '1px solid var(--line)',
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '10px',
+            fontSize: '0.76rem',
+            color: 'var(--faint)',
+          }}
+        >
+          <span>&copy; 2026 UNAI CRM &middot; Dealership Workspace Platform</span>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '12px', fontWeight: 600 }}>
+            <Link href="/privacy" style={{ color: 'var(--muted)', textDecoration: 'none' }}>
+              Privacy Policy
+            </Link>
+            <span aria-hidden="true">&middot;</span>
+            <Link href="/terms" style={{ color: 'var(--muted)', textDecoration: 'none' }}>
+              Terms of Service
+            </Link>
+          </div>
+        </footer>
       </div>
 
       <ProfileModal

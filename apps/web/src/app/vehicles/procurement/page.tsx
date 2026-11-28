@@ -80,6 +80,7 @@ export default function ProcurementPage() {
           <p className="page-desc">
             <WordFadeIn
               text="Supplier purchase orders, customer exchange vehicle appraisals, and showroom intake grading."
+              mobileText="Orders & trade-in stock"
               baseDelay={0.22}
               staggerDelay={0.035}
             />

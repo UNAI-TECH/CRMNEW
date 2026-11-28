@@ -183,7 +183,10 @@ export default function ServicePage() {
         <div>
           <h1 className="page-title">Service Workshop & After-Sales Management</h1>
           <p className="page-desc">
-            Job cards, technician allocation, spare parts requisition, warranty claims, and customer service SLAs.
+            <span className="wordfade-desktop">
+              Job cards, technician allocation, spare parts requisition, warranty claims, and customer service SLAs.
+            </span>
+            <span className="wordfade-mobile">Job cards &amp; service</span>
           </p>
         </div>
         <button

@@ -304,13 +304,24 @@ export default async function RootLayout({
               /* Desktop Screens (>768px): Hide mobile elements and restore full top bar nav pills */
               @media (min-width: 769px) {
                 .mobile-quick-access-wrap,
-                .mobile-subpage-back-wrap {
+                .mobile-subpage-back-wrap,
+                .wordfade-mobile {
                   display: none !important;
+                }
+                .wordfade-desktop {
+                  display: inline !important;
                 }
               }
 
               /* Mobile Screens (<=768px): Keep top bar & hero header flush and stable */
               @media (max-width: 768px) {
+                .wordfade-desktop {
+                  display: none !important;
+                }
+                .wordfade-mobile {
+                  display: inline !important;
+                  white-space: nowrap !important;
+                }
                 .app-main {
                   padding: 12px 14px 40px 14px !important;
                 }
@@ -354,6 +365,10 @@ export default async function RootLayout({
                   line-height: 1.35 !important;
                   font-weight: 500 !important;
                   margin: 0 !important;
+                  white-space: nowrap !important;
+                  overflow: hidden !important;
+                  text-overflow: ellipsis !important;
+                  max-width: 100% !important;
                 }
                 .hero-stats-row {
                   display: grid !important;

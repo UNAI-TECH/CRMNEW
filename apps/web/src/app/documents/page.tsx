@@ -277,6 +277,7 @@ export default function DocumentsPage() {
           <p className="page-desc">
             <WordFadeIn
               text="Centralized KYC identity verification, RTO statutory forms, insurance certificates, and PDI checklists synced with backend database."
+              mobileText="KYC, RTO & vault files"
               baseDelay={0.22}
               staggerDelay={0.035}
             />

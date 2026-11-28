@@ -81,6 +81,9 @@ export function PwaProvider({ children }: { children: React.ReactNode }) {
     if ('serviceWorker' in window.navigator) {
       window.navigator.serviceWorker
         .register('/sw.js', { scope: '/' })
+        .then((registration) => {
+          registration.update().catch(() => {});
+        })
         .catch(() => {
           // Non-fatal in private browsing or restricted origins
         });
@@ -358,8 +361,10 @@ export function PwaProvider({ children }: { children: React.ReactNode }) {
 
 export function PwaInstallButton({
   variant = 'circle',
+  buttonStyle,
 }: {
   variant?: 'circle' | 'floating';
+  buttonStyle?: React.CSSProperties;
 }) {
   const {
     hasMounted,
@@ -437,6 +442,7 @@ export function PwaInstallButton({
         color: canNativePrompt ? 'var(--pearl-green)' : 'var(--muted)',
         borderColor: canNativePrompt ? 'var(--pearl-green-border)' : undefined,
         cursor: isInstalling ? 'wait' : 'pointer',
+        ...buttonStyle,
       }}
     >
       <Download size={16} />

@@ -446,6 +446,24 @@ function GoogleAuthContent() {
               <ShieldCheck size={14} style={{ color: '#16A34A', flexShrink: 0 }} />
               <span>Secured with Supabase Authentication</span>
             </div>
+            <p
+              style={{
+                margin: '10px 0 0 0',
+                fontSize: '0.74rem',
+                color: '#94A3B8',
+                lineHeight: 1.5,
+              }}
+            >
+              By continuing, you agree to our{' '}
+              <Link href="/terms" style={{ color: '#6253F8', fontWeight: 600, textDecoration: 'none' }}>
+                Terms of Service
+              </Link>{' '}
+              and{' '}
+              <Link href="/privacy" style={{ color: '#6253F8', fontWeight: 600, textDecoration: 'none' }}>
+                Privacy Policy
+              </Link>
+              .
+            </p>
           </div>
         </div>
 

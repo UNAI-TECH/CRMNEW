@@ -189,6 +189,7 @@ export default function AppointmentsPage() {
           <p className="page-desc">
             <WordFadeIn
               text="Organize customer showroom visits, highway test drive routes, vehicle availability, and feedback."
+              mobileText="Visits & test drives"
               baseDelay={0.22}
               staggerDelay={0.035}
             />

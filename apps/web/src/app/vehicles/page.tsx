@@ -338,6 +338,7 @@ export default function VehiclesPage() {
           <p className="page-desc">
             <WordFadeIn
               text="Centralized multi-branch vehicle repository, VIN lifecycle, floor pricing, and stock turnaround metrics."
+              mobileText="Showroom stock & VINs"
               baseDelay={0.22}
               staggerDelay={0.035}
             />

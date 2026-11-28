@@ -241,6 +241,7 @@ export default function FinancePage() {
           <p className="page-desc">
             <WordFadeIn
               text="Customer token deposits, receipts, GST invoice management, accounts receivable, and dealership expenses."
+              mobileText="Bookings, GST & receipts"
               baseDelay={0.22}
               staggerDelay={0.035}
             />

@@ -130,7 +130,10 @@ export default function QuotationsPage() {
         <div>
           <h1 className="page-title">Quotation Desk & Pricing Engine</h1>
           <p className="page-desc">
-            Multi-tier pricing calculation, GST taxation, line item accessories, and discount approval matrix.
+            <span className="wordfade-desktop">
+              Multi-tier pricing calculation, GST taxation, line item accessories, and discount approval matrix.
+            </span>
+            <span className="wordfade-mobile">Quotes &amp; GST pricing</span>
           </p>
         </div>
         <button

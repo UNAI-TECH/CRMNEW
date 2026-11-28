@@ -475,6 +475,7 @@ export default function CustomersPage() {
           <p className="page-desc">
             <WordFadeIn
               text="Complete relationship lifecycle, purchase history, consent preferences, and KYC records."
+              mobileText="Profiles, history & KYC"
               baseDelay={0.22}
               staggerDelay={0.035}
             />

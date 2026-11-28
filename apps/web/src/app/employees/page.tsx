@@ -12,8 +12,10 @@ import {
   updateEmployee,
   updateEmployeePassword,
   updateEmployeeAccessControl,
-  addLeaveRecord,
-  updateLeaveRecordStatus,
+  submitEmployeeLeaveRequest,
+  reviewEmployeeLeaveRequest,
+  normalizeLeaveBalance,
+  computeRemainingLeaveDays,
   deleteEmployee,
   resetEmployeePassword,
   initEmployeesRealtime,
@@ -564,9 +566,25 @@ export default function EmployeesPage() {
       return;
     }
     setIsMounted(true);
-    setEmployees(getEmployees());
+    const localInitial = getEmployees();
+    setEmployees(localInitial);
+
+    const openRequestedLeaveModal = (list: Employee[]) => {
+      if (typeof window === 'undefined') return;
+      const params = new URLSearchParams(window.location.search);
+      const leaveEmpId = params.get('leaveEmployeeId');
+      if (leaveEmpId) {
+        const target = list.find((e) => e.id === leaveEmpId);
+        if (target) setSelectedForLeave(target);
+      }
+    };
+    openRequestedLeaveModal(localInitial);
+
     fetchEmployees().then((data) => {
-      if (Array.isArray(data)) setEmployees([...data]);
+      if (Array.isArray(data)) {
+        setEmployees([...data]);
+        openRequestedLeaveModal(data);
+      }
     });
     // Fetch dealership branches/showrooms created by user
     setAvailableBranches(api.getBranches());
@@ -575,10 +593,37 @@ export default function EmployeesPage() {
     });
     // Listen for Supabase Realtime changes so deletions in Supabase Table Editor delete live on the frontend
     initEmployeesRealtime();
-    const handleChanged = () => setEmployees(getEmployees());
+    const handleChanged = () => {
+      const latest = getEmployees();
+      setEmployees(latest);
+      setSelectedForLeave((prev) => (prev ? latest.find((e) => e.id === prev.id) || prev : null));
+    };
     const handleBranchesChanged = () => setAvailableBranches(api.getBranches());
+    const handleOpenLeaveEvent = (ev: Event) => {
+      const empId = (ev as CustomEvent)?.detail?.employeeId;
+      if (!empId) return;
+      const latest = getEmployees();
+      const target = latest.find((e) => e.id === empId);
+      if (target) setSelectedForLeave(target);
+    };
+    const handleRefreshOnFocus = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      fetchEmployees().then((data) => {
+        if (Array.isArray(data)) setEmployees([...data]);
+      });
+    };
+
     window.addEventListener('crm-employees-changed', handleChanged);
     window.addEventListener('crm-data-changed', handleBranchesChanged);
+    window.addEventListener('crm-open-employee-leave', handleOpenLeaveEvent);
+    window.addEventListener('focus', handleRefreshOnFocus);
+    document.addEventListener('visibilitychange', handleRefreshOnFocus);
+
+    const leavePoll = window.setInterval(() => {
+      fetchEmployees().then((data) => {
+        if (Array.isArray(data)) setEmployees([...data]);
+      });
+    }, 20000);
 
     // Global client and network error listeners to guarantee a pop-up on any error
     const handleWindowError = (event: ErrorEvent) => {
@@ -599,6 +644,10 @@ export default function EmployeesPage() {
     return () => {
       window.removeEventListener('crm-employees-changed', handleChanged);
       window.removeEventListener('crm-data-changed', handleBranchesChanged);
+      window.removeEventListener('crm-open-employee-leave', handleOpenLeaveEvent);
+      window.removeEventListener('focus', handleRefreshOnFocus);
+      document.removeEventListener('visibilitychange', handleRefreshOnFocus);
+      window.clearInterval(leavePoll);
       window.removeEventListener('error', handleWindowError);
       window.removeEventListener('unhandledrejection', handleUnhandledRejection);
     };
@@ -777,7 +826,7 @@ export default function EmployeesPage() {
     }
   };
 
-  const handleApplyLeave = (e: React.FormEvent) => {
+  const handleApplyLeave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedForLeave) return;
 
@@ -786,7 +835,7 @@ export default function EmployeesPage() {
       return;
     }
 
-    addLeaveRecord(selectedForLeave.id, {
+    const res = await submitEmployeeLeaveRequest(selectedForLeave.id, {
       leaveType: newLeaveForm.leaveType,
       startDate: newLeaveForm.startDate,
       endDate: newLeaveForm.endDate,
@@ -796,28 +845,41 @@ export default function EmployeesPage() {
       approvedBy: 'Tenant Admin',
     });
 
-    const updated = getEmployees().find((e) => e.id === selectedForLeave.id);
-    setSelectedForLeave(updated || null);
-    showToast(`Leave recorded for ${selectedForLeave.fullName}!`);
+    if (res.success) {
+      const updated = getEmployees().find((e) => e.id === selectedForLeave.id);
+      setEmployees(getEmployees());
+      setSelectedForLeave(updated || null);
+      showToast(`Leave recorded for ${selectedForLeave.fullName}!`);
+    } else {
+      triggerErrorPopup(res.error || 'Failed to record leave.', 'Leave Error');
+    }
+  };
+
+  const handleLeaveDecision = async (employeeId: string, employeeName: string, recordId: string, approved: boolean) => {
+    const newStatus = approved ? 'approved' : 'rejected';
+    const result = await reviewEmployeeLeaveRequest(employeeId, recordId, newStatus, 'Administrator');
+    if (result.success) {
+      const all = getEmployees();
+      setEmployees(all);
+      if (selectedForLeave && selectedForLeave.id === employeeId) {
+        setSelectedForLeave(all.find((e) => e.id === employeeId) || null);
+      }
+      if (selectedProfileCardEmp && selectedProfileCardEmp.id === employeeId) {
+        setSelectedProfileCardEmp(all.find((e) => e.id === employeeId) || null);
+      }
+      showToast(
+        approved
+          ? `Leave request approved for ${employeeName}! Balance updated.`
+          : `Leave request rejected for ${employeeName}.`
+      );
+    } else {
+      showToast(result.error || 'Failed to update leave record status.');
+    }
   };
 
   const handleApproveLeave = (recordId: string, approved: boolean) => {
     if (!selectedForLeave) return;
-    const newStatus = approved ? 'approved' : 'rejected';
-    const success = updateLeaveRecordStatus(selectedForLeave.id, recordId, newStatus, 'Tenant Admin');
-    if (success) {
-      const all = getEmployees();
-      setEmployees(all);
-      const updated = all.find((e) => e.id === selectedForLeave.id);
-      setSelectedForLeave(updated || null);
-      showToast(
-        approved
-          ? `Leave request approved for ${selectedForLeave.fullName}! Balance updated.`
-          : `Leave request rejected for ${selectedForLeave.fullName}.`
-      );
-    } else {
-      showToast('Failed to update leave record status.');
-    }
+    void handleLeaveDecision(selectedForLeave.id, selectedForLeave.fullName, recordId, approved);
   };
 
   const handleToggleAccess = (key: keyof EmployeeAccessControl) => {
@@ -855,6 +917,22 @@ export default function EmployeesPage() {
     });
   }, [employees, deptFilter, search]);
 
+  const pendingLeaveQueue = useMemo(() => {
+    const list: Array<{ employee: Employee; record: Employee['leaveHistory'][number] }> = [];
+    for (const emp of employees) {
+      for (const lh of emp.leaveHistory || []) {
+        if (lh && lh.status === 'pending') {
+          list.push({ employee: emp, record: lh });
+        }
+      }
+    }
+    return list.sort((a, b) => {
+      const tA = Date.parse(a.record.appliedOn || '') || 0;
+      const tB = Date.parse(b.record.appliedOn || '') || 0;
+      return tB - tA;
+    });
+  }, [employees]);
+
   return (
     <div style={{ paddingBottom: '3rem' }}>
       {toastMessage && (
@@ -885,11 +963,12 @@ export default function EmployeesPage() {
       <div className="page-header" style={{ marginBottom: '1.25rem' }}>
         <div>
           <h1 className="page-title">
-            <WordFadeIn text="Staff & Employee Workforce Management" />
+            <WordFadeIn text="Employee Management" />
           </h1>
           <p className="page-desc">
             <WordFadeIn
               text="Dealership employee directory, CRM ID & passwords, individual leave logs, and granular section access control."
+              mobileText="Directory, IDs & roles"
               baseDelay={0.18}
               staggerDelay={0.025}
             />
@@ -959,6 +1038,142 @@ export default function EmployeesPage() {
           ))}
         </div>
       </div>
+
+      {/* Pending Leave Requests Inbox (surfaces immediately when any staff submits time off) */}
+      {pendingLeaveQueue.length > 0 && (
+        <div className="emp-pending-leaves-card">
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              <Calendar size={17} style={{ color: '#B45309', flexShrink: 0 }} />
+              <span style={{ fontSize: '0.94rem', fontWeight: 800, color: '#78350F' }}>
+                Pending Leave Requests
+              </span>
+              <span
+                style={{
+                  padding: '2px 9px',
+                  borderRadius: '999px',
+                  backgroundColor: '#EF4444',
+                  color: '#FFFFFF',
+                  fontSize: '0.72rem',
+                  fontWeight: 800,
+                }}
+              >
+                {pendingLeaveQueue.length} Awaiting Approval
+              </span>
+            </div>
+            <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#92400E' }}>
+              Review and accept or reject staff time-off requests
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {pendingLeaveQueue.map(({ employee: emp, record: lh }) => (
+              <div key={`${emp.id}-${lh.id}`} className="emp-pending-leave-item">
+                <div style={{ minWidth: 0, flex: '1 1 240px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: '0.9rem', fontWeight: 800, color: '#0F172A' }}>
+                      {emp.fullName}
+                    </span>
+                    <span
+                      style={{
+                        fontFamily: 'monospace',
+                        fontSize: '0.72rem',
+                        fontWeight: 700,
+                        color: '#2563EB',
+                        background: '#EFF6FF',
+                        padding: '1px 7px',
+                        borderRadius: '6px',
+                        border: '1px solid #DBEAFE',
+                      }}
+                    >
+                      {emp.userId || emp.employeeCode}
+                    </span>
+                    <span
+                      style={{
+                        fontSize: '0.7rem',
+                        fontWeight: 800,
+                        padding: '2px 8px',
+                        borderRadius: '999px',
+                        backgroundColor: '#EEF2FF',
+                        color: '#4F46E5',
+                        textTransform: 'capitalize',
+                      }}
+                    >
+                      {lh.leaveType} Leave
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '0.78rem', color: '#334155', fontWeight: 600 }}>
+                    {lh.startDate} to {lh.endDate} ({lh.days} {lh.days === 1 ? 'day' : 'days'})
+                    {lh.reason ? <span style={{ color: '#64748B', fontWeight: 500 }}> • {lh.reason}</span> : null}
+                  </div>
+                </div>
+
+                <div className="emp-pending-leave-actions">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedForLeave(emp)}
+                    style={{
+                      padding: '6px 10px',
+                      borderRadius: '8px',
+                      backgroundColor: '#F8FAFC',
+                      color: '#334155',
+                      border: '1px solid #CBD5E1',
+                      fontSize: '0.75rem',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    Details
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleLeaveDecision(emp.id, emp.fullName, lh.id, true)}
+                    style={{
+                      padding: '6px 12px',
+                      borderRadius: '8px',
+                      backgroundColor: '#10B981',
+                      color: '#FFFFFF',
+                      border: 'none',
+                      fontSize: '0.76rem',
+                      fontWeight: 800,
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    <CheckCircle2 size={13} />
+                    <span>Accept</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleLeaveDecision(emp.id, emp.fullName, lh.id, false)}
+                    style={{
+                      padding: '6px 12px',
+                      borderRadius: '8px',
+                      backgroundColor: '#FFFFFF',
+                      color: '#DC2626',
+                      border: '1px solid #FECACA',
+                      fontSize: '0.76rem',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    <XCircle size={13} />
+                    <span>Reject</span>
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Employees List */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
@@ -1156,10 +1371,7 @@ export default function EmployeesPage() {
                 {/* Right: Action Buttons */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                   {(() => {
-                    const casualRem = Math.max(0, (emp.leaveBalance?.casual?.total || 0) - (emp.leaveBalance?.casual?.used || 0));
-                    const sickRem = Math.max(0, (emp.leaveBalance?.sick?.total || 0) - (emp.leaveBalance?.sick?.used || 0));
-                    const paidRem = Math.max(0, (emp.leaveBalance?.paid?.total || 0) - (emp.leaveBalance?.paid?.used || 0));
-                    const totalAvailLeave = casualRem + sickRem + paidRem;
+                    const totalAvailLeave = computeRemainingLeaveDays(emp.leaveBalance);
                     const pendingCount = (emp.leaveHistory || []).filter((lh) => lh.status === 'pending').length;
 
                     return (
@@ -2122,21 +2334,19 @@ export default function EmployeesPage() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
               {/* User ID */}
               <div
+                className="emp-cred-row"
                 style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
                   padding: '14px 16px',
                   borderRadius: '12px',
                   backgroundColor: '#F8FAFC',
                   border: '1.5px solid #E2E8F0',
                 }}
               >
-                <div>
+                <div style={{ minWidth: 0, flex: '1 1 160px' }}>
                   <div style={{ fontSize: '0.7rem', color: '#64748B', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                     Assigned User ID
                   </div>
-                  <div style={{ fontSize: '1.15rem', fontWeight: 800, color: '#1E293B', fontFamily: 'monospace' }}>
+                  <div style={{ fontSize: '1.15rem', fontWeight: 800, color: '#1E293B', fontFamily: 'monospace', overflowWrap: 'anywhere' }}>
                     {createdCredentialsModal.employee.userId || createdCredentialsModal.employee.employeeCode}
                   </div>
                 </div>
@@ -2155,6 +2365,8 @@ export default function EmployeesPage() {
                     fontWeight: 700,
                     color: '#0F172A',
                     cursor: 'pointer',
+                    flexShrink: 0,
+                    whiteSpace: 'nowrap',
                   }}
                 >
                   {copiedId === 'cred-id' ? <Check size={14} style={{ color: '#16A34A' }} /> : <Copy size={14} />}
@@ -2164,21 +2376,19 @@ export default function EmployeesPage() {
 
               {/* Portal URL */}
               <div
+                className="emp-cred-row"
                 style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
                   padding: '12px 16px',
                   borderRadius: '12px',
                   backgroundColor: '#EEF2FF',
                   border: '1.5px solid #C7D2FE',
                 }}
               >
-                <div>
+                <div style={{ minWidth: 0, flex: '1 1 160px' }}>
                   <div style={{ fontSize: '0.7rem', color: '#4338CA', fontWeight: 700, textTransform: 'uppercase' }}>
                     Staff Login URL
                   </div>
-                  <div style={{ fontSize: '0.88rem', fontWeight: 700, color: '#312E81' }}>
+                  <div style={{ fontSize: '0.88rem', fontWeight: 700, color: '#312E81', overflowWrap: 'anywhere' }}>
                     /emplogin
                   </div>
                 </div>
@@ -2197,6 +2407,8 @@ export default function EmployeesPage() {
                     fontSize: '0.76rem',
                     fontWeight: 700,
                     cursor: 'pointer',
+                    flexShrink: 0,
+                    whiteSpace: 'nowrap',
                   }}
                 >
                   {copiedId === 'cred-url' ? <Check size={14} style={{ color: '#16A34A' }} /> : <Copy size={14} />}
@@ -2275,16 +2487,17 @@ export default function EmployeesPage() {
           maxWidth="820px"
         >
           {(() => {
-            const casualTotal = selectedForLeave.leaveBalance?.casual.total || 12;
-            const casualUsed = selectedForLeave.leaveBalance?.casual.used || 0;
+            const lb = normalizeLeaveBalance(selectedForLeave.leaveBalance);
+            const casualTotal = lb.casual.total;
+            const casualUsed = lb.casual.used;
             const casualRem = Math.max(0, casualTotal - casualUsed);
 
-            const sickTotal = selectedForLeave.leaveBalance?.sick.total || 7;
-            const sickUsed = selectedForLeave.leaveBalance?.sick.used || 0;
+            const sickTotal = lb.sick.total;
+            const sickUsed = lb.sick.used;
             const sickRem = Math.max(0, sickTotal - sickUsed);
 
-            const paidTotal = selectedForLeave.leaveBalance?.paid.total || 18;
-            const paidUsed = selectedForLeave.leaveBalance?.paid.used || 0;
+            const paidTotal = lb.paid.total;
+            const paidUsed = lb.paid.used;
             const paidRem = Math.max(0, paidTotal - paidUsed);
 
             const totalRem = casualRem + sickRem + paidRem;
@@ -2294,8 +2507,8 @@ export default function EmployeesPage() {
               <div style={{ display: 'flex', flexDirection: 'column', gap: '22px' }}>
                 {/* Leave Balance Overview Cards */}
                 <div>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
-                    <div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' }}>
+                    <div style={{ minWidth: 0 }}>
                       <div style={{ fontSize: '0.94rem', fontWeight: 800, color: '#0F172A' }}>
                         Staff Leave Balance
                       </div>
@@ -2312,13 +2525,15 @@ export default function EmployeesPage() {
                         fontSize: '0.78rem',
                         fontWeight: 800,
                         border: '1px solid #C7D2FE',
+                        whiteSpace: 'nowrap',
+                        flexShrink: 0,
                       }}
                     >
                       Total Balance: {totalRem} Days Remaining
                     </span>
                   </div>
 
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
+                  <div className="emp-leave-cards-grid">
                     {/* Casual */}
                     <div
                       style={{
@@ -2392,8 +2607,8 @@ export default function EmployeesPage() {
 
                 {/* Leave Requests & Approval Section */}
                 <div>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                       <span style={{ fontSize: '0.92rem', fontWeight: 800, color: '#0F172A' }}>
                         Employee Leave Requests
                       </span>
@@ -2407,13 +2622,14 @@ export default function EmployeesPage() {
                             fontSize: '0.72rem',
                             fontWeight: 800,
                             border: '1px solid #FDE68A',
+                            whiteSpace: 'nowrap',
                           }}
                         >
                           {pendingRequests.length} Pending Approval
                         </span>
                       )}
                     </div>
-                    <span style={{ fontSize: '0.76rem', color: '#64748B' }}>
+                    <span style={{ fontSize: '0.76rem', color: '#64748B', whiteSpace: 'nowrap' }}>
                       {selectedForLeave.leaveHistory.length} Total Submissions
                     </span>
                   </div>
@@ -2433,8 +2649,8 @@ export default function EmployeesPage() {
                       No leave requests submitted by {selectedForLeave.fullName} yet. When this employee requests time off from their Employee Portal, it will appear here with an approval option.
                     </div>
                   ) : (
-                    <div style={{ border: '1px solid #E2E8F0', borderRadius: '12px', overflow: 'hidden' }}>
-                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
+                    <div className="emp-table-scroll-wrap">
+                      <table style={{ width: '100%', minWidth: '620px', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
                         <thead>
                           <tr style={{ backgroundColor: '#F8FAFC', borderBottom: '1px solid #E2E8F0', color: '#475569' }}>
                             <th style={{ padding: '10px 14px', textAlign: 'left', fontWeight: 700 }}>Type</th>
@@ -2553,7 +2769,7 @@ export default function EmployeesPage() {
                                         }}
                                       >
                                         <CheckCircle2 size={13} />
-                                        <span>Approve</span>
+                                        <span>Accept</span>
                                       </button>
                                       <button
                                         type="button"
@@ -2609,7 +2825,7 @@ export default function EmployeesPage() {
           maxWidth="640px"
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+            <div className="emp-modal-grid-2">
               {[
                 { key: 'pipeline' as const, label: 'Pipeline & Leads' },
                 { key: 'customers' as const, label: 'Customers' },
@@ -2664,12 +2880,12 @@ export default function EmployeesPage() {
           }}
           maxWidth="680px"
           headerContent={
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <div style={{ fontSize: '1.08rem', fontWeight: 800, color: 'var(--text, #0F172A)' }}>
+            <div className="emp-dossier-header">
+              <div className="emp-dossier-title">
                 Staff &amp; Employee Dossier
               </div>
               <span
-                className="badge"
+                className="badge emp-dossier-dept-badge"
                 style={{
                   background: '#EEF2FF',
                   color: '#4338CA',
@@ -2685,33 +2901,30 @@ export default function EmployeesPage() {
             </div>
           }
           headerActions={
-            <div className="modal-header-actions" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <div className="modal-header-actions">
               <button
                 type="button"
                 onClick={() => setIsEditingDossier((prev) => !prev)}
-                className="modal-header-edit-btn"
+                className="modal-header-edit-btn emp-dossier-header-edit-btn"
                 style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '5px',
-                  padding: '5px 12px',
-                  borderRadius: '999px',
                   border: '1px solid #E2E8F0',
                   background: isEditingDossier ? '#0284C7' : '#FFFFFF',
                   color: isEditingDossier ? '#FFFFFF' : '#0F172A',
-                  fontSize: '0.78rem',
-                  fontWeight: 700,
-                  cursor: 'pointer',
-                  transition: 'all 0.18s ease',
                 }}
               >
                 {isEditingDossier ? (
                   <>
-                    <Check size={13} /> View Mode
+                    <Check size={13} />
+                    <span>
+                      View<span className="emp-hide-xs"> Mode</span>
+                    </span>
                   </>
                 ) : (
                   <>
-                    <Pencil size={13} /> Edit Details
+                    <Pencil size={13} />
+                    <span>
+                      Edit<span className="emp-hide-xs"> Details</span>
+                    </span>
                   </>
                 )}
               </button>
@@ -2723,8 +2936,8 @@ export default function EmployeesPage() {
                 }}
                 className="modal-header-close-btn"
                 style={{
-                  width: '30px',
-                  height: '30px',
+                  width: '32px',
+                  height: '32px',
                   borderRadius: '50%',
                   border: '1px solid #E2E8F0',
                   background: '#FFFFFF',
@@ -2733,6 +2946,7 @@ export default function EmployeesPage() {
                   justifyContent: 'center',
                   cursor: 'pointer',
                   color: '#64748B',
+                  flexShrink: 0,
                 }}
                 aria-label="Close"
               >
@@ -2741,7 +2955,7 @@ export default function EmployeesPage() {
             </div>
           }
           footer={
-            <div className="unique-modal-footer-bar" style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div className="unique-modal-footer-bar">
               <button
                 type="button"
                 onClick={() => {
@@ -2749,7 +2963,7 @@ export default function EmployeesPage() {
                   setIsEditingDossier(false);
                 }}
                 className="btn btn-secondary btn-sm"
-                style={{ borderRadius: '999px', padding: '0.45rem 1.25rem' }}
+                style={{ borderRadius: '999px', padding: '0.45rem 1.2rem', whiteSpace: 'nowrap' }}
               >
                 &lt; Cancel
               </button>
@@ -2760,12 +2974,13 @@ export default function EmployeesPage() {
                   className="unique-lead-submit-btn"
                   style={{
                     borderRadius: '999px',
-                    padding: '0.5rem 1.4rem',
+                    padding: '0.5rem 1.35rem',
                     display: 'inline-flex',
                     alignItems: 'center',
                     gap: '6px',
                     fontSize: '0.84rem',
                     fontWeight: 700,
+                    whiteSpace: 'nowrap',
                   }}
                 >
                   <span>Save Changes</span>
@@ -2778,12 +2993,13 @@ export default function EmployeesPage() {
                   className="unique-lead-submit-btn"
                   style={{
                     borderRadius: '999px',
-                    padding: '0.5rem 1.4rem',
+                    padding: '0.5rem 1.35rem',
                     display: 'inline-flex',
                     alignItems: 'center',
                     gap: '6px',
                     fontSize: '0.84rem',
                     fontWeight: 700,
+                    whiteSpace: 'nowrap',
                   }}
                 >
                   <span>Edit Details</span>
@@ -2793,19 +3009,9 @@ export default function EmployeesPage() {
             </div>
           }
         >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             {/* 1. Identity & Profile Banner (Styled identically to Image 2) */}
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '14px',
-                padding: '16px',
-                borderRadius: '16px',
-                background: 'linear-gradient(135deg, #F0F9FF 0%, #EEF2FF 100%)',
-                border: '1px solid rgba(2, 132, 199, 0.22)',
-              }}
-            >
+            <div className="emp-dossier-banner">
               <div
                 style={{
                   width: '56px',
@@ -2839,7 +3045,7 @@ export default function EmployeesPage() {
               <div style={{ flex: 1, minWidth: 0 }}>
                 {isEditingDossier ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                    <div className="emp-dossier-edit-row">
                       <div>
                         <label style={{ fontSize: '0.72rem', fontWeight: 700, color: '#475569' }}>Full Name</label>
                         <input
@@ -2986,31 +3192,21 @@ export default function EmployeesPage() {
                       </span>
                     </div>
 
-                    <div
-                      style={{
-                        fontSize: '0.8rem',
-                        color: '#64748B',
-                        marginTop: '4px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '14px',
-                        flexWrap: 'wrap',
-                      }}
-                    >
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                        <Phone size={13} style={{ color: '#0284C7' }} />
+                    <div className="emp-dossier-contact-row">
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', minWidth: 0 }}>
+                        <Phone size={13} style={{ color: '#0284C7', flexShrink: 0 }} />
                         {selectedProfileCardEmp.phone ? (
-                          <a href={`tel:${selectedProfileCardEmp.phone}`} style={{ color: '#0F172A', fontWeight: 700, textDecoration: 'none' }}>
+                          <a href={`tel:${selectedProfileCardEmp.phone}`} style={{ color: '#0F172A', fontWeight: 700, textDecoration: 'none', whiteSpace: 'nowrap' }}>
                             {selectedProfileCardEmp.phone}
                           </a>
                         ) : (
                           <span style={{ color: '#94A3B8', fontWeight: 500 }}>No phone</span>
                         )}
                       </span>
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                        <Mail size={13} style={{ color: '#0284C7' }} />
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', minWidth: 0, overflowWrap: 'anywhere' }}>
+                        <Mail size={13} style={{ color: '#0284C7', flexShrink: 0 }} />
                         {selectedProfileCardEmp.email ? (
-                          <a href={`mailto:${selectedProfileCardEmp.email}`} style={{ color: '#0F172A', fontWeight: 700, textDecoration: 'none' }}>
+                          <a href={`mailto:${selectedProfileCardEmp.email}`} style={{ color: '#0F172A', fontWeight: 700, textDecoration: 'none', overflowWrap: 'anywhere' }}>
                             {selectedProfileCardEmp.email}
                           </a>
                         ) : (
@@ -3018,9 +3214,9 @@ export default function EmployeesPage() {
                         )}
                       </span>
                       {selectedProfileCardEmp.branch && (
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                          <MapPin size={13} style={{ color: '#0284C7' }} />
-                          {selectedProfileCardEmp.branch}
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', minWidth: 0 }}>
+                          <MapPin size={13} style={{ color: '#0284C7', flexShrink: 0 }} />
+                          <span>{selectedProfileCardEmp.branch}</span>
                         </span>
                       )}
                     </div>
@@ -3030,19 +3226,19 @@ export default function EmployeesPage() {
             </div>
 
             {/* 2. Grid of Information Cards (Styled identically to Image 2) */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+            <div className="emp-dossier-grid">
               {/* Card 1: CRM Login Credentials */}
-              <div style={{ padding: '12px 14px', borderRadius: '12px', background: '#FFFFFF', border: '1px solid #E2E8F0', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-                  <span style={{ fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', color: '#64748B', letterSpacing: '0.04em' }}>
+              <div className="emp-dossier-card">
+                <div className="emp-dossier-card-head">
+                  <span className="emp-dossier-card-label">
                     CRM Login Credentials
                   </span>
                   {selectedProfileCardEmp.isPasswordSet ? (
-                    <span style={{ fontSize: '0.68rem', fontWeight: 700, color: '#16A34A', background: '#F0FDF4', padding: '2px 6px', borderRadius: '4px' }}>
+                    <span style={{ fontSize: '0.68rem', fontWeight: 700, color: '#16A34A', background: '#F0FDF4', padding: '2px 7px', borderRadius: '4px', whiteSpace: 'nowrap', flexShrink: 0 }}>
                       Permanent Active ✓
                     </span>
                   ) : (
-                    <span style={{ fontSize: '0.68rem', fontWeight: 700, color: '#D97706', background: '#FEF3C7', padding: '2px 6px', borderRadius: '4px' }}>
+                    <span style={{ fontSize: '0.68rem', fontWeight: 700, color: '#D97706', background: '#FEF3C7', padding: '2px 7px', borderRadius: '4px', whiteSpace: 'nowrap', flexShrink: 0 }}>
                       Password Pending
                     </span>
                   )}
@@ -3061,17 +3257,17 @@ export default function EmployeesPage() {
                     />
                   </div>
                 ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.82rem' }}>
-                      <span style={{ color: '#64748B', fontWeight: 600 }}>User ID:</span>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <span style={{ fontFamily: 'monospace', fontWeight: 800, color: '#0284C7' }}>
+                  <div className="emp-dossier-kv-list">
+                    <div className="emp-dossier-kv-row">
+                      <span className="emp-dossier-kv-key">User ID:</span>
+                      <div className="emp-dossier-kv-val">
+                        <span style={{ fontFamily: 'monospace', fontWeight: 800, color: '#0284C7', overflowWrap: 'anywhere' }}>
                           {selectedProfileCardEmp.userId || selectedProfileCardEmp.employeeCode}
                         </span>
                         <button
                           type="button"
                           onClick={() => handleCopy(selectedProfileCardEmp.userId || selectedProfileCardEmp.employeeCode, `id-${selectedProfileCardEmp.id}`)}
-                          style={{ background: 'none', border: 'none', color: '#0284C7', cursor: 'pointer', padding: '2px' }}
+                          style={{ background: 'none', border: 'none', color: '#0284C7', cursor: 'pointer', padding: '2px', display: 'inline-flex', alignItems: 'center', flexShrink: 0 }}
                           title="Copy User ID"
                         >
                           {copiedId === `id-${selectedProfileCardEmp.id}` ? <Check size={13} style={{ color: '#10B981' }} /> : <Copy size={13} />}
@@ -3079,15 +3275,22 @@ export default function EmployeesPage() {
                       </div>
                     </div>
 
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.82rem' }}>
-                      <span style={{ color: '#64748B', fontWeight: 600 }}>Password:</span>
-                      <span style={{ fontSize: '0.76rem', fontWeight: 700, color: selectedProfileCardEmp.isPasswordSet ? '#16A34A' : '#D97706' }}>
+                    <div className="emp-dossier-kv-row">
+                      <span className="emp-dossier-kv-key">Password:</span>
+                      <span
+                        className="emp-dossier-kv-val"
+                        style={{
+                          fontSize: '0.76rem',
+                          fontWeight: 700,
+                          color: selectedProfileCardEmp.isPasswordSet ? '#16A34A' : '#D97706',
+                        }}
+                      >
                         {selectedProfileCardEmp.isPasswordSet ? '•••••••• (Encrypted in DB)' : 'Pending 1st Login'}
                       </span>
                     </div>
 
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '2px', paddingTop: '6px', borderTop: '1px dashed #E2E8F0' }}>
-                      <span style={{ fontSize: '0.7rem', color: '#94A3B8' }}>
+                    <div className="emp-dossier-card-foot">
+                      <span style={{ fontSize: '0.7rem', color: '#94A3B8', lineHeight: 1.3 }}>
                         {selectedProfileCardEmp.isPasswordSet ? 'Set & verified in database' : 'Creates password at /emplogin'}
                       </span>
                       <button
@@ -3107,17 +3310,20 @@ export default function EmployeesPage() {
                           background: 'none',
                           border: 'none',
                           color: '#4F46E5',
-                          fontSize: '0.7rem',
+                          fontSize: '0.72rem',
                           fontWeight: 700,
                           cursor: 'pointer',
-                          padding: 0,
+                          padding: '2px 0',
                           display: 'inline-flex',
                           alignItems: 'center',
-                          gap: '3px',
+                          gap: '4px',
+                          whiteSpace: 'nowrap',
+                          flexShrink: 0,
                         }}
                         title="Reset password so employee can set a new permanent password on next login"
                       >
-                        <RefreshCw size={10} /> Reset Password
+                        <RefreshCw size={11} style={{ flexShrink: 0 }} />
+                        <span>Reset Password</span>
                       </button>
                     </div>
                   </div>
@@ -3125,13 +3331,13 @@ export default function EmployeesPage() {
               </div>
 
               {/* Card 2: Designation & Compensation */}
-              <div style={{ padding: '12px 14px', borderRadius: '12px', background: '#FFFFFF', border: '1px solid #E2E8F0', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
-                <span style={{ fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', color: '#64748B', letterSpacing: '0.04em' }}>
+              <div className="emp-dossier-card">
+                <span className="emp-dossier-card-label">
                   Designation &amp; Compensation
                 </span>
 
                 {isEditingDossier ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '4px' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                     <div>
                       <label style={{ fontSize: '0.72rem', color: '#64748B' }}>Designation</label>
                       <input
@@ -3154,11 +3360,11 @@ export default function EmployeesPage() {
                     </div>
                   </div>
                 ) : (
-                  <>
-                    <div style={{ fontWeight: 800, fontSize: '0.92rem', color: '#0F172A', marginTop: '4px' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <div style={{ fontWeight: 800, fontSize: '0.94rem', color: '#0F172A' }}>
                       {selectedProfileCardEmp.designation}
                     </div>
-                    <div style={{ fontSize: '0.78rem', color: selectedProfileCardEmp.salary ? '#16A34A' : '#94A3B8', fontWeight: 800, marginTop: '3px' }}>
+                    <div style={{ fontSize: '0.8rem', color: selectedProfileCardEmp.salary ? '#16A34A' : '#94A3B8', fontWeight: 800 }}>
                       {selectedProfileCardEmp.salary ? (
                         <>
                           {selectedProfileCardEmp.salary}{' '}
@@ -3168,60 +3374,61 @@ export default function EmployeesPage() {
                         'Salary Not Set'
                       )}
                     </div>
-                    <div style={{ fontSize: '0.72rem', color: '#94A3B8', marginTop: '2px' }}>
+                    <div style={{ fontSize: '0.74rem', color: '#94A3B8' }}>
                       Joined: {selectedProfileCardEmp.joiningDate}
                     </div>
-                  </>
+                  </div>
                 )}
               </div>
 
               {/* Card 3: Leave Record Balances */}
-              <div style={{ padding: '12px 14px', borderRadius: '12px', background: '#FFFFFF', border: '1px solid #E2E8F0', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
-                  <span style={{ fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', color: '#64748B', letterSpacing: '0.04em' }}>
+              <div className="emp-dossier-card">
+                <div className="emp-dossier-card-head">
+                  <span className="emp-dossier-card-label">
                     Leave Record Balances
                   </span>
                   <button
                     type="button"
                     onClick={() => setSelectedForLeave(selectedProfileCardEmp)}
-                    style={{ background: 'none', border: 'none', color: '#0284C7', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer', padding: 0 }}
+                    style={{ background: 'none', border: 'none', color: '#0284C7', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer', padding: 0, whiteSpace: 'nowrap', flexShrink: 0 }}
                   >
                     Leave Logs ({selectedProfileCardEmp.leaveHistory?.length || 0}) &rarr;
                   </button>
                 </div>
 
                 {(() => {
-                  const casualTot = selectedProfileCardEmp.leaveBalance?.casual?.total || 0;
-                  const casualUsed = selectedProfileCardEmp.leaveBalance?.casual?.used || 0;
-                  const sickTot = selectedProfileCardEmp.leaveBalance?.sick?.total || 0;
-                  const sickUsed = selectedProfileCardEmp.leaveBalance?.sick?.used || 0;
-                  const paidTot = selectedProfileCardEmp.leaveBalance?.paid?.total || 0;
-                  const paidUsed = selectedProfileCardEmp.leaveBalance?.paid?.used || 0;
+                  const lb = normalizeLeaveBalance(selectedProfileCardEmp.leaveBalance);
+                  const casualTot = lb.casual.total;
+                  const casualUsed = lb.casual.used;
+                  const sickTot = lb.sick.total;
+                  const sickUsed = lb.sick.used;
+                  const paidTot = lb.paid.total;
+                  const paidUsed = lb.paid.used;
 
                   return (
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px', textAlign: 'center', marginTop: '4px' }}>
-                      <div style={{ background: '#F8FAFC', padding: '6px 4px', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
-                        <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#64748B' }}>CASUAL</div>
-                        <div style={{ fontSize: '1.05rem', fontWeight: 900, color: '#0F172A' }}>
+                    <div className="emp-leave-mini-grid">
+                      <div className="emp-leave-mini-box">
+                        <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#64748B', letterSpacing: '0.03em' }}>CASUAL</div>
+                        <div style={{ fontSize: '1.08rem', fontWeight: 900, color: '#0F172A', lineHeight: 1.25, margin: '2px 0' }}>
                           {Math.max(0, casualTot - casualUsed)}
                         </div>
-                        <div style={{ fontSize: '0.62rem', color: '#94A3B8' }}>of {casualTot} left</div>
+                        <div style={{ fontSize: '0.64rem', color: '#94A3B8', whiteSpace: 'nowrap' }}>of {casualTot} left</div>
                       </div>
 
-                      <div style={{ background: '#F8FAFC', padding: '6px 4px', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
-                        <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#64748B' }}>SICK</div>
-                        <div style={{ fontSize: '1.05rem', fontWeight: 900, color: '#0F172A' }}>
+                      <div className="emp-leave-mini-box">
+                        <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#64748B', letterSpacing: '0.03em' }}>SICK</div>
+                        <div style={{ fontSize: '1.08rem', fontWeight: 900, color: '#0F172A', lineHeight: 1.25, margin: '2px 0' }}>
                           {Math.max(0, sickTot - sickUsed)}
                         </div>
-                        <div style={{ fontSize: '0.62rem', color: '#94A3B8' }}>of {sickTot} left</div>
+                        <div style={{ fontSize: '0.64rem', color: '#94A3B8', whiteSpace: 'nowrap' }}>of {sickTot} left</div>
                       </div>
 
-                      <div style={{ background: '#F8FAFC', padding: '6px 4px', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
-                        <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#64748B' }}>PAID</div>
-                        <div style={{ fontSize: '1.05rem', fontWeight: 900, color: '#0F172A' }}>
+                      <div className="emp-leave-mini-box">
+                        <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#64748B', letterSpacing: '0.03em' }}>PAID</div>
+                        <div style={{ fontSize: '1.08rem', fontWeight: 900, color: '#0F172A', lineHeight: 1.25, margin: '2px 0' }}>
                           {Math.max(0, paidTot - paidUsed)}
                         </div>
-                        <div style={{ fontSize: '0.62rem', color: '#94A3B8' }}>of {paidTot} left</div>
+                        <div style={{ fontSize: '0.64rem', color: '#94A3B8', whiteSpace: 'nowrap' }}>of {paidTot} left</div>
                       </div>
                     </div>
                   );
@@ -3229,15 +3436,15 @@ export default function EmployeesPage() {
               </div>
 
               {/* Card 4: Authorized CRM Sections */}
-              <div style={{ padding: '12px 14px', borderRadius: '12px', background: '#FFFFFF', border: '1px solid #E2E8F0', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
-                  <span style={{ fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', color: '#64748B', letterSpacing: '0.04em' }}>
+              <div className="emp-dossier-card">
+                <div className="emp-dossier-card-head">
+                  <span className="emp-dossier-card-label">
                     Authorized CRM Sections
                   </span>
-                  <span style={{ fontSize: '0.68rem', color: '#64748B' }}>Click to toggle</span>
+                  <span style={{ fontSize: '0.68rem', color: '#64748B', whiteSpace: 'nowrap', flexShrink: 0 }}>Click to toggle</span>
                 </div>
 
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px', marginTop: '4px' }}>
+                <div className="emp-section-chips">
                   {[
                     { key: 'pipeline' as const, label: 'Pipeline' },
                     { key: 'customers' as const, label: 'Customers' },
@@ -3273,7 +3480,7 @@ export default function EmployeesPage() {
                         style={{
                           fontSize: '0.72rem',
                           fontWeight: 700,
-                          padding: '3px 8px',
+                          padding: '4px 9px',
                           borderRadius: '6px',
                           display: 'inline-flex',
                           alignItems: 'center',
@@ -3283,6 +3490,7 @@ export default function EmployeesPage() {
                           border: currentAccess ? '1px solid #A7F3D0' : '1px solid #E2E8F0',
                           cursor: 'pointer',
                           transition: 'all 0.15s ease',
+                          whiteSpace: 'nowrap',
                         }}
                       >
                         <span style={{ fontSize: '0.76rem' }}>{currentAccess ? '✓' : '✕'}</span>

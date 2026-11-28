@@ -568,6 +568,7 @@ export default function LeadsPage() {
           <p className="page-desc">
             <WordFadeIn
               text="End-to-end sales pipeline tracking, AI scoring, branch allocations, and stage progression."
+              mobileText="Pipeline & lead stages"
               baseDelay={0.22}
               staggerDelay={0.035}
             />

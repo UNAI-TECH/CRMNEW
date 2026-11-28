@@ -129,6 +129,7 @@ export default function DealsPage() {
           <p className="page-desc">
             <WordFadeIn
               text="Deal closing progress, 5-stage handover gates (Payment, Documents, Finance, PDI, Delivery)."
+              mobileText="Deals & handover gates"
               baseDelay={0.22}
               staggerDelay={0.035}
             />

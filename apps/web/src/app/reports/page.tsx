@@ -635,6 +635,7 @@ export default function ReportsPage() {
           <p className="page-desc">
             <WordFadeIn
               text="Multi-branch revenue performance, sales conversion funnel, stock aging analysis, and gross margin reporting."
+              mobileText="Revenue, funnel & margin"
               baseDelay={0.22}
               staggerDelay={0.035}
             />

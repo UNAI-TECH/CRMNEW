@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { WordFadeIn } from '@/components/ui/WordFadeIn';
 import { PwaInstallButton } from '@/components/pwa/PwaInstallControl';
@@ -1734,48 +1735,25 @@ export default function OnboardingPage() {
           </div>
 
           {/* Navigation Action */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '20px', borderTop: '1px solid rgba(98, 83, 248, 0.1)' }}>
+          <div className="onboarding-actions-row">
             <button
               type="button"
               onClick={() => router.push('/')}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '8px',
-                padding: '11px 22px',
-                borderRadius: '999px',
-                background: 'rgba(98, 83, 248, 0.07)',
-                color: '#6253F8',
-                fontSize: '0.84rem',
-                fontWeight: 800,
-                border: 'none',
-                cursor: 'pointer',
-              }}
+              className="onboarding-back-btn"
             >
-              <ArrowLeft size={16} />
+              <ArrowLeft size={15} />
               <span>Back</span>
             </button>
 
             <button
               type="button"
               onClick={handleNextFromStep1}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '10px',
-                padding: '13px 30px',
-                borderRadius: '999px',
-                background: 'linear-gradient(135deg, #7957F6 0%, #6253F8 50%, #4054F5 100%)',
-                color: '#FFFFFF',
-                fontSize: '0.9rem',
-                fontWeight: 800,
-                border: 'none',
-                cursor: 'pointer',
-                boxShadow: '0 8px 24px -6px rgba(98, 83, 248, 0.38)',
-              }}
+              className="onboarding-next-btn"
             >
-              <span>Continue to Tax & Banking</span>
-              <ArrowRight size={16} />
+              <span>
+                <span className="onboarding-btn-verbose">Continue to </span>Tax &amp; Banking
+              </span>
+              <ArrowRight size={15} />
             </button>
           </div>
         </div>
@@ -2098,48 +2076,25 @@ export default function OnboardingPage() {
             </div>
           </div>
 
-          <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: '20px', borderTop: '1px solid rgba(98, 83, 248, 0.1)' }}>
+          <div className="onboarding-actions-row">
             <button
               type="button"
               onClick={() => setActiveStep(1)}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '8px',
-                padding: '11px 22px',
-                borderRadius: '999px',
-                background: 'rgba(98, 83, 248, 0.07)',
-                color: '#6253F8',
-                fontSize: '0.84rem',
-                fontWeight: 800,
-                border: 'none',
-                cursor: 'pointer',
-              }}
+              className="onboarding-back-btn"
             >
-              <ArrowLeft size={16} />
+              <ArrowLeft size={15} />
               <span>Back</span>
             </button>
 
             <button
               type="button"
               onClick={handleNextFromStep2}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '10px',
-                padding: '13px 30px',
-                borderRadius: '999px',
-                background: 'linear-gradient(135deg, #7957F6 0%, #6253F8 50%, #4054F5 100%)',
-                color: '#FFFFFF',
-                fontSize: '0.9rem',
-                fontWeight: 800,
-                border: 'none',
-                cursor: 'pointer',
-                boxShadow: '0 8px 24px -6px rgba(98, 83, 248, 0.38)',
-              }}
+              className="onboarding-next-btn"
             >
-              <span>Continue to Invoice Signature</span>
-              <ArrowRight size={16} />
+              <span>
+                <span className="onboarding-btn-verbose">Continue to </span>Invoice Signature
+              </span>
+              <ArrowRight size={15} />
             </button>
           </div>
         </div>
@@ -2404,48 +2359,25 @@ export default function OnboardingPage() {
             )}
           </div>
 
-          <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: '20px', borderTop: '1px solid rgba(98, 83, 248, 0.1)' }}>
+          <div className="onboarding-actions-row">
             <button
               type="button"
               onClick={() => setActiveStep(2)}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '8px',
-                padding: '11px 22px',
-                borderRadius: '999px',
-                background: 'rgba(98, 83, 248, 0.07)',
-                color: '#6253F8',
-                fontSize: '0.84rem',
-                fontWeight: 800,
-                border: 'none',
-                cursor: 'pointer',
-              }}
+              className="onboarding-back-btn"
             >
-              <ArrowLeft size={16} />
+              <ArrowLeft size={15} />
               <span>Back</span>
             </button>
 
             <button
               type="button"
               onClick={handleNextFromStep3}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '10px',
-                padding: '13px 30px',
-                borderRadius: '999px',
-                background: 'linear-gradient(135deg, #7957F6 0%, #6253F8 50%, #4054F5 100%)',
-                color: '#FFFFFF',
-                fontSize: '0.9rem',
-                fontWeight: 800,
-                border: 'none',
-                cursor: 'pointer',
-                boxShadow: '0 8px 24px -6px rgba(98, 83, 248, 0.38)',
-              }}
+              className="onboarding-next-btn"
             >
-              <span>Continue to Plugin Access Control</span>
-              <ArrowRight size={16} />
+              <span>
+                <span className="onboarding-btn-verbose">Continue to </span>Plugin Access<span className="onboarding-btn-verbose"> Control</span>
+              </span>
+              <ArrowRight size={15} />
             </button>
           </div>
         </div>
@@ -2629,48 +2561,25 @@ export default function OnboardingPage() {
             })}
           </div>
 
-          <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: '20px', borderTop: '1px solid rgba(98, 83, 248, 0.1)' }}>
+          <div className="onboarding-actions-row">
             <button
               type="button"
               onClick={() => setActiveStep(3)}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '8px',
-                padding: '11px 22px',
-                borderRadius: '999px',
-                background: 'rgba(98, 83, 248, 0.07)',
-                color: '#6253F8',
-                fontSize: '0.84rem',
-                fontWeight: 800,
-                border: 'none',
-                cursor: 'pointer',
-              }}
+              className="onboarding-back-btn"
             >
-              <ArrowLeft size={16} />
+              <ArrowLeft size={15} />
               <span>Back</span>
             </button>
 
             <button
               type="button"
               onClick={handleNextFromStep4}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '10px',
-                padding: '13px 30px',
-                borderRadius: '999px',
-                background: 'linear-gradient(135deg, #7957F6 0%, #6253F8 50%, #4054F5 100%)',
-                color: '#FFFFFF',
-                fontSize: '0.9rem',
-                fontWeight: 800,
-                border: 'none',
-                cursor: 'pointer',
-                boxShadow: '0 8px 24px -6px rgba(98, 83, 248, 0.38)',
-              }}
+              className="onboarding-next-btn"
             >
-              <span>Continue to Create Account</span>
-              <ArrowRight size={16} />
+              <span>
+                <span className="onboarding-btn-verbose">Continue to </span>Create Account
+              </span>
+              <ArrowRight size={15} />
             </button>
           </div>
         </div>
@@ -3108,64 +3017,59 @@ export default function OnboardingPage() {
             )}
 
             {/* Submission Footer */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '20px', borderTop: '1px solid rgba(98, 83, 248, 0.1)', flexWrap: 'wrap', gap: '14px' }}>
+            <div className="onboarding-actions-row">
               <button
                 type="button"
                 disabled={isSubmitting}
                 onClick={() => setActiveStep(4)}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '8px',
-                  padding: '11px 22px',
-                  borderRadius: '999px',
-                  background: 'rgba(98, 83, 248, 0.07)',
-                  color: '#6253F8',
-                  fontSize: '0.84rem',
-                  fontWeight: 800,
-                  border: 'none',
-                  cursor: isSubmitting ? 'not-allowed' : 'pointer',
-                  opacity: isSubmitting ? 0.6 : 1,
-                }}
+                className="onboarding-back-btn"
+                style={{ opacity: isSubmitting ? 0.6 : 1 }}
               >
-                <ArrowLeft size={16} />
+                <ArrowLeft size={15} />
                 <span>Back</span>
               </button>
 
               <button
                 type="submit"
                 disabled={isSubmitting}
-                style={{
-                  padding: '14px 36px',
-                  fontSize: '0.94rem',
-                  fontWeight: 800,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '10px',
-                  borderRadius: '999px',
-                  border: 'none',
-                  background: isSubmitting
-                    ? '#A5B4FC'
-                    : 'linear-gradient(135deg, #7957F6 0%, #6253F8 50%, #4054F5 100%)',
-                  color: '#FFFFFF',
-                  boxShadow: '0 8px 24px -6px rgba(98, 83, 248, 0.42)',
-                  cursor: isSubmitting ? 'not-allowed' : 'pointer',
-                  transition: 'all 0.2s ease',
-                }}
+                className="onboarding-next-btn"
               >
                 {isSubmitting ? (
                   <>
-                    <Loader2 size={18} className="animate-spin" />
-                    <span>Saving Setup to Supabase...</span>
+                    <Loader2 size={16} className="animate-spin" />
+                    <span>Saving Setup...</span>
                   </>
                 ) : (
-                  <span>Complete Onboarding & Create Account</span>
+                  <span>
+                    <span className="onboarding-btn-verbose">Complete Onboarding &amp; </span>Create Account
+                  </span>
                 )}
               </button>
             </div>
           </div>
         </form>
       )}
+
+      {/* Subtle Legal Footer across all Onboarding Steps */}
+      <div
+        style={{
+          marginTop: '24px',
+          textAlign: 'center',
+          fontSize: '0.78rem',
+          color: '#64748B',
+          fontWeight: 500,
+        }}
+      >
+        By creating a dealership workspace, you agree to UNAI CRM&rsquo;s{' '}
+        <Link href="/terms" style={{ color: '#6253F8', fontWeight: 700, textDecoration: 'none' }}>
+          Terms of Service
+        </Link>{' '}
+        and{' '}
+        <Link href="/privacy" style={{ color: '#6253F8', fontWeight: 700, textDecoration: 'none' }}>
+          Privacy Policy
+        </Link>
+        .
+      </div>
 
       {/* Celebration & Redirection to Login Modal */}
       {isSuccessModalOpen && (
@@ -3230,7 +3134,7 @@ export default function OnboardingPage() {
                 letterSpacing: '0.04em',
               }}
             >
-              🎉 DEALERSHIP WORKSPACE INITIALIZED
+              DEALERSHIP WORKSPACE INITIALIZED
             </div>
 
             <h2 style={{ fontSize: '1.45rem', fontWeight: 900, color: '#17191A', marginBottom: '8px', letterSpacing: '-0.02em' }}>
