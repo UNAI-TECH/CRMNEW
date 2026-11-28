@@ -29,8 +29,16 @@ export async function GET(req: NextRequest) {
     const authUserId = authResult.success ? authResult.session.user.id : undefined;
     const email = queryEmail || (authResult.success ? authResult.session.user.email.toLowerCase().trim() : undefined);
 
-    const result = await fetchCompanyProfileWithModules({ tenantId, email, authUserId });
-    return NextResponse.json(result);
+    const result = await fetchCompanyProfileWithModules({
+      tenantId,
+      email,
+      authUserId,
+      allowTenantSharedAccess: authResult.success,
+    });
+    return NextResponse.json({
+      ...result,
+      authenticated: authResult.success,
+    });
   } catch (err: any) {
     return NextResponse.json({ error: err?.message || 'Server error', isOnboarded: false }, { status: 500 });
   }

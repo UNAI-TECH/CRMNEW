@@ -430,7 +430,14 @@ export default async function RootLayout({
                     };
                     document.cookie = 'crm-employee-session=' + encodeURIComponent(JSON.stringify(cookieData)) + '; path=/; max-age=604800; SameSite=Lax';
                   }
-                  var c = localStorage.getItem('crm_dealership_company_profile_v1');
+                  var activeTid = 't_default';
+                  try {
+                    if (s) {
+                      var parsedS = JSON.parse(s);
+                      activeTid = parsedS.tenantId || (parsedS.employeeId && localStorage.getItem('crm_emp_tenant_' + parsedS.employeeId)) || activeTid;
+                    }
+                  } catch(e2) {}
+                  var c = localStorage.getItem('crm_dealership_company_profile_v1_' + activeTid) || localStorage.getItem('crm_dealership_company_profile_v1');
                   if (c) {
                     var cp = JSON.parse(c);
                     var name = cp.tradeName || cp.legalName || '';

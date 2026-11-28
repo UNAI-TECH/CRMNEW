@@ -255,27 +255,43 @@ export function Shell({
       return;
     }
 
-    // Initial load
+    // Initial local load before async sync
     setModules(getModules());
-    setCompany(getCompanyProfile());
+    const initialLocalCompany = getCompanyProfile();
+    setCompany(initialLocalCompany);
 
     const sessNow = getUserSession();
     const isStaff = pathname.startsWith('/empportal') || Boolean(sessNow?.employeeId && !sessNow?.isAdmin);
     const isStandalone = isStandaloneShellPath(pathname);
 
-    // Only query remote Supabase module plugins for admin workspace sessions (never on staff portal or public login)
-    if (!isStaff && !isStandalone) {
-      fetchModules().then((m) => {
-        if (m && m.length > 0) setModules(m);
-      });
+    const syncCompanyAndModules = (staffFlag: boolean) => {
+      if (!staffFlag) {
+        fetchModules().then((m) => {
+          if (m && m.length > 0) setModules(m);
+        });
+      }
       fetchCompanyProfile().then((p) => {
-        if (p) setCompany(p);
+        if (!p) return;
+        const hasBranding = Boolean(p.isOnboarded || p.logoUrl || p.tradeName || p.legalName);
+        if (hasBranding || (p as any)._verifiedUnonboarded) {
+          setCompany((prev) => {
+            if (!hasBranding && (prev.logoUrl || prev.tradeName || prev.legalName) && !(p as any)._verifiedUnonboarded) {
+              return prev;
+            }
+            return p;
+          });
+        }
         const sess = getUserSession();
         const staffSess = Boolean(sess?.employeeId && !sess?.isAdmin);
-        if (!staffSess && p && !p.isOnboarded && isWorkspaceContentPath(pathname)) {
+        if (!staffSess && !staffFlag && (p as any)._verifiedUnonboarded && !p.isOnboarded && isWorkspaceContentPath(pathname)) {
           router.replace('/onboarding');
         }
       });
+    };
+
+    // Fetch dealership branding (logo & name) for ALL signed-in users (admin and staff) on workspace routes
+    if (!isStandalone) {
+      syncCompanyAndModules(isStaff);
     }
 
     const syncLocalNotifs = () => {
@@ -298,8 +314,13 @@ export function Shell({
     };
 
     const handleSessionChanged = () => {
-      setSessionState(getUserSession());
+      const updatedSess = getUserSession();
+      setSessionState(updatedSess);
+      setCompany(getCompanyProfile());
+      setModules(getModules());
       if (!isStandaloneShellPath(pathname)) {
+        const staffNow = pathname.startsWith('/empportal') || Boolean(updatedSess?.employeeId && !updatedSess?.isAdmin);
+        syncCompanyAndModules(staffNow);
         fetchNotifications().then((data) => {
           if (Array.isArray(data)) setNotifications(data);
         });
@@ -320,7 +341,7 @@ export function Shell({
     };
 
     const handleStorage = (e: StorageEvent) => {
-      if (e.key === 'crm_dealership_company_profile_v1') {
+      if (e.key && (e.key.startsWith('crm_dealership_company_profile_v1') || e.key.startsWith('crm_dealership_logo_v1'))) {
         setCompany(getCompanyProfile());
       }
       if (e.key === 'crm_active_user_session_v1') {

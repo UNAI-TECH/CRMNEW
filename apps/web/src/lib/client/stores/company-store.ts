@@ -55,9 +55,52 @@ export interface CompanyProfile {
 }
 
 const BASE_STORAGE_KEY = 'crm_dealership_company_profile_v1';
+const BASE_LOGO_KEY = 'crm_dealership_logo_v1';
 
-function getStorageKey(): string {
-  return getScopedKey(BASE_STORAGE_KEY);
+function getStorageKey(tenantOverride?: string): string {
+  return tenantOverride ? `${BASE_STORAGE_KEY}_${tenantOverride}` : getScopedKey(BASE_STORAGE_KEY);
+}
+
+function getLogoStorageKey(tenantOverride?: string): string {
+  return tenantOverride ? `${BASE_LOGO_KEY}_${tenantOverride}` : getScopedKey(BASE_LOGO_KEY);
+}
+
+function persistCompactLogoCache(tenantId: string, logoUrl?: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const cleanLogo = logoUrl && logoUrl !== '/unai-logo.png' ? logoUrl : '';
+    const logoKey = getLogoStorageKey(tenantId);
+    if (!cleanLogo) {
+      localStorage.removeItem(logoKey);
+      return;
+    }
+    if (cleanLogo.startsWith('data:image/') && cleanLogo.length > 25000) {
+      compressDataUrl(cleanLogo, 128, 0.85).then((compressed) => {
+        try {
+          if (compressed) localStorage.setItem(logoKey, compressed);
+        } catch {}
+      });
+    } else {
+      localStorage.setItem(logoKey, cleanLogo);
+    }
+  } catch {}
+}
+
+function safeStoreCompanyProfile(key: string, profile: CompanyProfile, tenantId: string): void {
+  if (typeof window === 'undefined') return;
+  persistCompactLogoCache(tenantId, profile.logoUrl);
+  try {
+    localStorage.setItem(key, JSON.stringify(profile));
+  } catch {
+    // Retry without potentially huge signatureUrl so logoUrl & core branding never exceed Safari localStorage quota
+    try {
+      const compactProfile: CompanyProfile = {
+        ...profile,
+        signatureUrl: '',
+      };
+      localStorage.setItem(key, JSON.stringify(compactProfile));
+    } catch {}
+  }
 }
 
 /**
@@ -198,16 +241,25 @@ export function getUserCredentials(): UserCredentials | null {
 export function getCompanyProfile(): CompanyProfile {
   if (typeof window === 'undefined') return DEFAULT_COMPANY_PROFILE;
   try {
-    const key = getStorageKey();
-    const raw = localStorage.getItem(key);
+    const tenantId = getActiveTenantId();
+    const key = getStorageKey(tenantId);
+    const raw = localStorage.getItem(key) || localStorage.getItem(BASE_STORAGE_KEY);
+    const cachedLogo = localStorage.getItem(getLogoStorageKey(tenantId)) || '';
     if (!raw) {
-      return DEFAULT_COMPANY_PROFILE;
+      return cachedLogo && cachedLogo !== '/unai-logo.png'
+        ? { ...DEFAULT_COMPANY_PROFILE, logoUrl: cachedLogo }
+        : DEFAULT_COMPANY_PROFILE;
     }
     const parsed = JSON.parse(raw);
     if (!parsed) {
-      return DEFAULT_COMPANY_PROFILE;
+      return cachedLogo && cachedLogo !== '/unai-logo.png'
+        ? { ...DEFAULT_COMPANY_PROFILE, logoUrl: cachedLogo }
+        : DEFAULT_COMPANY_PROFILE;
     }
     const profile = { ...DEFAULT_COMPANY_PROFILE, ...parsed };
+    if ((!profile.logoUrl || profile.logoUrl === '/unai-logo.png') && cachedLogo && cachedLogo !== '/unai-logo.png') {
+      profile.logoUrl = cachedLogo;
+    }
     if (profile.logoUrl === '/unai-logo.png') {
       profile.logoUrl = '';
     }
@@ -220,10 +272,8 @@ export function getCompanyProfile(): CompanyProfile {
       compressDataUrl(originalLogo).then((compressed) => {
         if (compressed && compressed !== originalLogo && compressed.length < originalLogo.length) {
           profile.logoUrl = compressed;
-          try {
-            localStorage.setItem(key, JSON.stringify(profile));
-            window.dispatchEvent(new CustomEvent('crm-company-profile-changed', { detail: profile }));
-          } catch {}
+          safeStoreCompanyProfile(key, profile, tenantId);
+          window.dispatchEvent(new CustomEvent('crm-company-profile-changed', { detail: profile }));
         }
       });
     }
@@ -235,7 +285,9 @@ export function getCompanyProfile(): CompanyProfile {
 }
 
 export function hydrateCompanyProfileFromApi(data: any, fallbackTenantId?: string): CompanyProfile {
-  const tenantId = data?.tenant_id || fallbackTenantId || getActiveTenantId();
+  const activeTenantId = getActiveTenantId();
+  const tenantId = data?.tenant_id || fallbackTenantId || activeTenantId;
+  const serverLogo = data?.logo_url && data.logo_url !== '/unai-logo.png' ? data.logo_url : '';
   const mapped: CompanyProfile = {
     id: data?.id || `company_${tenantId}`,
     legalName: data?.legal_name || '',
@@ -260,7 +312,7 @@ export function hydrateCompanyProfileFromApi(data: any, fallbackTenantId?: strin
     ifscCode: data?.ifsc_code || '',
     branchName: data?.branch_name || '',
     upiId: data?.upi_id || '',
-    logoUrl: data?.logo_url && data.logo_url !== '/unai-logo.png' ? data.logo_url : '',
+    logoUrl: serverLogo,
     brandColor: data?.brand_color || '#6253F8',
     watermarkEnabled: data?.watermark_enabled ?? true,
     watermarkOpacity: Number(data?.watermark_opacity) || 0.08,
@@ -272,11 +324,15 @@ export function hydrateCompanyProfileFromApi(data: any, fallbackTenantId?: strin
   };
 
   if (typeof window !== 'undefined') {
-    try {
-      const key = getStorageKey();
-      localStorage.setItem(key, JSON.stringify(mapped));
-      window.dispatchEvent(new CustomEvent('crm-company-profile-changed', { detail: mapped }));
-    } catch {}
+    safeStoreCompanyProfile(getStorageKey(tenantId), mapped, tenantId);
+    if (activeTenantId && activeTenantId !== tenantId) {
+      safeStoreCompanyProfile(getStorageKey(activeTenantId), mapped, activeTenantId);
+    }
+    const brandName = mapped.tradeName || mapped.legalName || '';
+    if (brandName && typeof document !== 'undefined') {
+      document.cookie = `crm-dealership-name=${encodeURIComponent(brandName)}; path=/; max-age=604800; SameSite=Lax`;
+    }
+    window.dispatchEvent(new CustomEvent('crm-company-profile-changed', { detail: mapped }));
   }
 
   return mapped;
@@ -305,9 +361,11 @@ export async function fetchCompanyProfile(): Promise<CompanyProfile> {
         return hydrateCompanyProfileFromApi(json.profile, tenantId);
       }
 
-      if (json && json.isOnboarded === false) {
+      // Only clear cached local branding if the server explicitly verified an authenticated user who is not onboarded.
+      // Never wipe saved logos on transient unauthenticated refreshes.
+      if (json && json.authenticated === true && json.isOnboarded === false) {
         clearLocalCompanyProfile();
-        return DEFAULT_COMPANY_PROFILE;
+        return { ...DEFAULT_COMPANY_PROFILE, _verifiedUnonboarded: true } as any;
       }
     }
   } catch (err) {
@@ -320,7 +378,9 @@ export async function fetchCompanyProfile(): Promise<CompanyProfile> {
 export function clearLocalCompanyProfile(): void {
   if (typeof window === 'undefined') return;
   try {
-    localStorage.removeItem(getStorageKey());
+    const tenantId = getActiveTenantId();
+    localStorage.removeItem(getStorageKey(tenantId));
+    localStorage.removeItem(getLogoStorageKey(tenantId));
     localStorage.removeItem(BASE_STORAGE_KEY);
     window.dispatchEvent(new CustomEvent('crm-company-profile-changed', { detail: DEFAULT_COMPANY_PROFILE }));
   } catch {}
@@ -328,12 +388,12 @@ export function clearLocalCompanyProfile(): void {
 
 export function saveCompanyProfile(
   profile: Partial<CompanyProfile>,
-  options?: { skipRemoteSync?: boolean }
+  options?: { skipRemoteSync?: boolean; tenantId?: string }
 ): CompanyProfile {
   if (typeof window === 'undefined') return { ...DEFAULT_COMPANY_PROFILE, ...profile };
   try {
+    const tenantId = options?.tenantId || getActiveTenantId();
     const current = getCompanyProfile();
-    const tenantId = getActiveTenantId();
     const profileId = updatedId(profile.id || current.id, tenantId);
 
     const updated: CompanyProfile = {
@@ -344,8 +404,8 @@ export function saveCompanyProfile(
       updatedAt: new Date().toISOString(),
     };
 
-    const key = getStorageKey();
-    localStorage.setItem(key, JSON.stringify(updated));
+    const key = getStorageKey(tenantId);
+    safeStoreCompanyProfile(key, updated, tenantId);
     window.dispatchEvent(new CustomEvent('crm-company-profile-changed', { detail: updated }));
 
     if (typeof document !== 'undefined') {

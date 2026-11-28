@@ -3,6 +3,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { api } from '@/lib/client/api-client';
 import { Customer } from '@crm/shared-types';
+import { INDIAN_STATES } from '@/lib/data/location-data';
 import { getCompanyProfile, DEFAULT_COMPANY_PROFILE, CompanyProfile, saveCompanyProfile } from '@/lib/client/stores/company-store';
 import {
   numberToWordsINR,
@@ -45,6 +46,15 @@ interface InvoiceDocumentGeneratorProps {
   onClose?: () => void;
   onSave?: (invoiceData: any) => void;
   isModal?: boolean;
+}
+
+function formatCustomerOptionName(c?: Partial<Customer> | null): string {
+  if (!c) return '';
+  const name = [c.firstName, c.lastName]
+    .map((part) => (part ? String(part).trim() : ''))
+    .filter((part) => part && part.toLowerCase() !== 'undefined' && part.toLowerCase() !== 'null')
+    .join(' ');
+  return name || (c.companyName ? String(c.companyName).trim() : '') || 'Customer';
 }
 
 export function InvoiceDocumentGenerator({
@@ -99,7 +109,7 @@ export function InvoiceDocumentGenerator({
 
   const [customerId, setCustomerId] = useState(initialCustomer?.id || '');
   const [customerName, setCustomerName] = useState(
-    initialCustomer ? `${initialCustomer.firstName} ${initialCustomer.lastName}` : ''
+    initialCustomer ? formatCustomerOptionName(initialCustomer) : ''
   );
   const [companyName, setCompanyName] = useState(initialCustomer?.companyName || '');
   const [gstin, setGstin] = useState(initialCustomer?.gstin || '');
@@ -138,13 +148,19 @@ export function InvoiceDocumentGenerator({
     setCustomerId(cId);
     const found = customers.find((c) => c.id === cId);
     if (found) {
-      setCustomerName(`${found.firstName} ${found.lastName}`.trim());
+      setCustomerName(formatCustomerOptionName(found));
       setCompanyName(found.companyName || '');
       setGstin(found.gstin || '');
       setEmail(found.email || '');
       setPhone(found.phone || '');
       setBillingAddress(found.address?.street || '');
-      setState(found.address?.state || '');
+      const rawState = (found.address?.state || '').trim();
+      const matchedState = rawState
+        ? INDIAN_STATES.find(
+            (st) => st.toLowerCase().replace(/\s+/g, '') === rawState.toLowerCase().replace(/\s+/g, '')
+          ) || rawState
+        : '';
+      setState(matchedState);
       setPincode(found.address?.pincode || '');
     } else {
       setCustomerName('');
@@ -638,7 +654,7 @@ export function InvoiceDocumentGenerator({
       {!showPreview ? (
         /* FORM EDITOR (Image 2 & 3 UI) */
         <div className="no-print inspo-form-wrapper" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          {/* Customer Selection Dropdown (from Image 2) */}
+          {/* Customer Selection Dropdown */}
           <div className="form-group">
             <select
               className="form-select"
@@ -649,7 +665,7 @@ export function InvoiceDocumentGenerator({
               <option value="">-- Select a Customer to Auto-fill Details --</option>
               {customers.map((c) => (
                 <option key={c.id} value={c.id}>
-                  {c.firstName} {c.lastName} — {c.phone}
+                  {formatCustomerOptionName(c)}
                 </option>
               ))}
             </select>
@@ -729,21 +745,29 @@ export function InvoiceDocumentGenerator({
             <div className="form-group">
               <label className="form-label">State & Pincode</label>
               <div style={{ display: 'flex', gap: '6px' }}>
-                <input
-                  type="text"
-                  className="form-input"
+                <select
+                  className="form-select"
                   value={state}
                   onChange={(e) => setState(e.target.value)}
-                  placeholder="State"
-                  style={{ flex: 1.2 }}
-                />
+                  style={{ flex: 1.35, minWidth: 0 }}
+                >
+                  <option value="">-- Select State --</option>
+                  {INDIAN_STATES.map((st) => (
+                    <option key={st} value={st}>
+                      {st}
+                    </option>
+                  ))}
+                  {state && !INDIAN_STATES.includes(state) && (
+                    <option value={state}>{state}</option>
+                  )}
+                </select>
                 <input
                   type="text"
                   className="form-input"
                   value={pincode}
                   onChange={(e) => setPincode(e.target.value)}
                   placeholder="Pincode"
-                  style={{ flex: 0.9 }}
+                  style={{ flex: 0.9, minWidth: 0 }}
                 />
               </div>
             </div>
@@ -1406,9 +1430,9 @@ export function InvoiceDocumentGenerator({
                         maxWidth: '440px',
                       }}
                     >
-                      {billingAddress || 'Jl. Klakahrejo - Manyang'}
+                      {billingAddress}
                       {(state || pincode) && (
-                        <span>, {state || 'Central Java'} {pincode ? `- ${pincode}` : ''}</span>
+                        <span>{billingAddress ? ', ' : ''}{[state, pincode].filter(Boolean).join(' - ')}</span>
                       )}
                       {phone && <span> | Phone: {phone}</span>}
                       {gstin && (

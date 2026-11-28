@@ -9,6 +9,33 @@ function isUuid(val: any): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(val);
 }
 
+function cleanNamePart(val: unknown): string {
+  if (val === undefined || val === null) return '';
+  const trimmed = String(val).trim();
+  if (!trimmed || trimmed.toLowerCase() === 'undefined' || trimmed.toLowerCase() === 'null') {
+    return '';
+  }
+  return trimmed;
+}
+
+function formatPersonName(first?: unknown, last?: unknown): string {
+  return [cleanNamePart(first), cleanNamePart(last)].filter(Boolean).join(' ').trim();
+}
+
+function isPhantomDefaultLead(l: any, customerName: string): boolean {
+  if (!l) return false;
+  const prefMake = String(l.preferred_make || '').trim();
+  const prefModel = String(l.preferred_model || '').trim();
+  const source = String(l.source || '').trim();
+  const cleanName = customerName.toLowerCase().trim();
+  if (cleanName === 'undefined undefined' || cleanName === 'undefined') return true;
+  if (prefMake === 'Enquiry' && prefModel === 'Vehicle Enquiry') return true;
+  if (source === 'Customer Registration' && (prefModel === 'Enquiry' || prefModel === 'Vehicle Enquiry' || !cleanName)) {
+    return true;
+  }
+  return false;
+}
+
 // Ensures an app_users row exists for staff assignment foreign key compliance
 async function ensureAppUser(id: string, fullName: string, email: string) {
   if (!isUuid(id)) return null;
@@ -72,10 +99,8 @@ export async function GET(req: NextRequest) {
     }
 
     const employees = employeesRes.data || [];
-    const { primaryBranchId } = await ensureTenantAndBranch(tenantId);
 
-    // Requirement 3: Ensure every customer (both old and newly registered) appears in the pipeline
-    // as an enquiry lead in "New Enquiries" (status: 'new') until they are contacted.
+    // Normalize custom pipeline stage names encoded via timeline prefix and clean phantom default leads
     const allLeads = (leadsRes.data || []).map((l: any) => {
       if (typeof l.timeline === 'string' && l.timeline.startsWith('__stage__:')) {
         return {
@@ -85,99 +110,26 @@ export async function GET(req: NextRequest) {
       }
       return l;
     });
-    const leadsByCustomer = new Map<string, any[]>();
-    for (const l of allLeads) {
-      if (l.customer_id) {
-        if (!leadsByCustomer.has(l.customer_id)) leadsByCustomer.set(l.customer_id, []);
-        leadsByCustomer.get(l.customer_id)!.push(l);
-      }
-    }
-
-    const missingCustomerLeads: any[] = [];
-    const leadIdsToResetToNew: string[] = [];
-    const duplicateLeadIdsToDelete: string[] = [];
-
-    for (const cust of (customersRes.data || [])) {
-      const custLeads = leadsByCustomer.get(cust.id) || [];
-      const hasRealActivity =
-        (appointmentsRes.data || []).some((a: any) => a.customer_id === cust.id || custLeads.some((l) => l.id === a.lead_id)) ||
-        (testDrivesRes.data || []).some((td: any) => td.customer_id === cust.id);
-
-      const isContactedOrBeyond = custLeads.some(
-        (l) => Boolean(l.status) && !['new', 'assigned'].includes(l.status)
-      );
-
-      if (!isContactedOrBeyond && !hasRealActivity) {
-        // Uncontacted customer without active bookings: ensure enquiry in "New Enquiries" (status: 'new')
-        const newLead = custLeads.find((l) => l.status === 'new');
-        if (!newLead) {
-          if (custLeads.length > 0) {
-            // Uncontacted lead without actual appointments: reset to 'new'
-            const primaryLead = custLeads[0];
-            primaryLead.status = 'new';
-            leadIdsToResetToNew.push(primaryLead.id);
-            // Deduplicate redundant duplicate uncontacted cards
-            if (custLeads.length > 1) {
-              for (let i = 1; i < custLeads.length; i++) {
-                duplicateLeadIdsToDelete.push(custLeads[i].id);
-              }
-            }
-          } else {
-            // Customer has no lead at all — create one in "New Enquiries"
-            const leadId = randomUUID();
-            const preferredVehicle = (cust as any).preferred_model || (cust as any).preferredVehicle || '';
-            const missingLead = {
-              id: leadId,
-              tenant_id: tenantId,
-              branch_id: cust.branch_id || primaryBranchId,
-              customer_id: cust.id,
-              source: cust.source || 'Customer Registration',
-              status: 'new', // Enters pipeline in "New Enquiries" until contacted
-              assigned_to: cust.assigned_to || null,
-              budget_min: Number((cust as any).budget_min) || 1200000,
-              budget_max: Number((cust as any).budget_max) || 2000000,
-              preferred_make: '',
-              preferred_model: preferredVehicle || 'Enquiry',
-              preferred_fuel_type: (cust as any).preferred_fuel_type || 'Petrol',
-              score: 80,
-              notes: preferredVehicle ? `Customer expressed preference for ${preferredVehicle}.` : 'New customer enquiry in CRM pipeline.',
-              next_action_at: new Date(Date.now() + 86400000 * 2).toISOString(),
-              created_at: cust.created_at || new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-            };
-            missingCustomerLeads.push(missingLead);
-            allLeads.push(missingLead);
-          }
-        } else if (custLeads.length > 1) {
-          // If a 'new' lead exists, prune any uncontacted duplicates
-          const duplicates = custLeads.filter((l) => l.id !== newLead.id && !['contacted', 'qualified', 'negotiation', 'converted'].includes(l.status));
-          for (const d of duplicates) {
-            duplicateLeadIdsToDelete.push(d.id);
-          }
-        }
-      }
-    }
-
-    if (missingCustomerLeads.length > 0) {
-      await supabaseAdmin.from('leads').insert(missingCustomerLeads);
-    }
-    if (leadIdsToResetToNew.length > 0) {
-      await supabaseAdmin
-        .from('leads')
-        .update({ status: 'new', updated_at: new Date().toISOString() })
-        .in('id', leadIdsToResetToNew);
-    }
-    if (duplicateLeadIdsToDelete.length > 0) {
-      const dupSet = new Set(duplicateLeadIdsToDelete);
-      await supabaseAdmin.from('leads').delete().in('id', duplicateLeadIdsToDelete);
-      leadsRes.data = allLeads.filter((l: any) => !dupSet.has(l.id));
-    } else {
-      leadsRes.data = allLeads;
-    }
 
     const customersMap = new Map((customersRes.data || []).map((c) => [c.id, c]));
     const employeesMap = new Map(employees.map((e) => [e.id, e]));
     const vehiclesMap = new Map((vehiclesRes.data || []).map((v) => [v.id, v]));
+
+    const phantomLeadIds: string[] = [];
+    const validLeads = allLeads.filter((l: any) => {
+      const cust = customersMap.get(l.customer_id);
+      const cName = formatPersonName(cust?.first_name, cust?.last_name);
+      if (isPhantomDefaultLead(l, cName)) {
+        phantomLeadIds.push(l.id);
+        return false;
+      }
+      return true;
+    });
+    if (phantomLeadIds.length > 0) {
+      try {
+        await supabaseAdmin.from('leads').delete().in('id', phantomLeadIds);
+      } catch {}
+    }
 
     // Map latest active appointment for each lead and customer
     const appointmentsByLead = new Map<string, any>();
@@ -192,18 +144,22 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // Enrich leads with live customer, team member assignee, and appointment details
-    const enrichedLeads = (leadsRes.data || []).map((l) => {
+    // Enrich leads with live customer, team member assignee, and appointment details without injecting defaults
+    const enrichedLeads = validLeads.map((l: any) => {
       const cust = customersMap.get(l.customer_id);
       const emp = l.assigned_to ? employeesMap.get(l.assigned_to) : null;
       const linkedApt = appointmentsByLead.get(l.id) || appointmentsByCustomer.get(l.customer_id);
+      const cleanMake = l.preferred_make === 'Enquiry' ? '' : (l.preferred_make || '');
+      const cleanModel = ['Enquiry', 'Vehicle Enquiry', 'Showroom Vehicle'].includes(l.preferred_model)
+        ? ''
+        : (l.preferred_model || '');
       let appointmentDetails: any = null;
       if (linkedApt) {
         const aptEmp = linkedApt.assigned_to ? employeesMap.get(linkedApt.assigned_to) : null;
         const aptVeh = linkedApt.vehicle_id ? vehiclesMap.get(linkedApt.vehicle_id) : null;
         const vehName = aptVeh
           ? `${aptVeh.make} ${aptVeh.model}${aptVeh.variant ? ` ${aptVeh.variant}` : ''}`.trim()
-          : (linkedApt.outcome || l.preferred_model || 'Showroom Vehicle');
+          : (linkedApt.outcome || cleanModel || '');
 
         appointmentDetails = {
           id: linkedApt.id,
@@ -220,14 +176,18 @@ export async function GET(req: NextRequest) {
         };
       }
 
+      const resolvedCustomerName = cust ? formatPersonName(cust.first_name, cust.last_name) : '';
+
       return {
         ...l,
-        customer_name: cust ? `${cust.first_name} ${cust.last_name}`.trim() : undefined,
+        preferred_make: cleanMake,
+        preferred_model: cleanModel,
+        customer_name: resolvedCustomerName || undefined,
         customer_phone: cust?.phone,
         customer_email: cust?.email,
         assignee_name: emp
           ? `${emp.full_name} (${(emp.role || 'Staff').replace(/_/g, ' ')})`
-          : (l.assigned_to ? 'Assigned Consultant' : 'Unassigned Consultant'),
+          : (l.assigned_to ? 'Assigned Consultant' : ''),
         appointment: appointmentDetails,
         appointment_details: appointmentDetails,
       };
@@ -240,11 +200,11 @@ export async function GET(req: NextRequest) {
       const veh = a.vehicle_id ? vehiclesMap.get(a.vehicle_id) : null;
       const vehName = veh
         ? `${veh.make} ${veh.model}${veh.variant ? ` ${veh.variant}` : ''}`.trim()
-        : (a.outcome || 'Showroom Vehicle');
+        : (a.outcome || '');
 
       return {
         ...a,
-        customer_name: cust ? `${cust.first_name} ${cust.last_name}`.trim() : undefined,
+        customer_name: cust ? (formatPersonName(cust.first_name, cust.last_name) || undefined) : undefined,
         customer_phone: cust?.phone,
         assignee_name: emp ? emp.full_name : undefined,
         vehicle_name: vehName,
@@ -362,13 +322,15 @@ export async function POST(req: NextRequest) {
 
       case 'customer': {
         const customerId = (data.id && isUuid(data.id)) ? data.id : randomUUID();
+        const firstNameClean = cleanNamePart(data.first_name ?? data.firstName);
+        const lastNameClean = cleanNamePart(data.last_name ?? data.lastName);
         const payload = {
           id: customerId,
           tenant_id: tenantId,
           branch_id: resolvedBranchId,
           type: data.type || 'individual',
-          first_name: (data.first_name || data.firstName || 'Customer').trim(),
-          last_name: (data.last_name || data.lastName || '').trim(),
+          first_name: firstNameClean || cleanNamePart(data.company_name ?? data.companyName) || 'Customer',
+          last_name: lastNameClean,
           email: data.email || null,
           phone: data.phone || '',
           pan_number: data.pan_number || data.panNumber || null,
@@ -383,58 +345,6 @@ export async function POST(req: NextRequest) {
         const res = await supabaseAdmin.from('customers').upsert(payload, { onConflict: 'id' }).select();
         result = res.data;
         error = res.error;
-
-        if (!error) {
-          // Resolve assigned staff member UUID if provided
-          let assignedToUuid: string | null = null;
-          const candidateStaff = data.assigned_to || data.assignedTo;
-          if (candidateStaff && isUuid(candidateStaff)) {
-            assignedToUuid = String(candidateStaff);
-            await ensureAppUser(assignedToUuid, data.assignedToName || 'Sales Consultant', `${assignedToUuid.slice(0, 8)}@dealership.internal`);
-          }
-
-          // Check whether an enquiry lead already exists for this customer in Supabase
-          const { data: existingLeads } = await supabaseAdmin
-            .from('leads')
-            .select('id, status')
-            .eq('customer_id', customerId)
-            .eq('tenant_id', tenantId)
-            .limit(1);
-
-          const preferredMake = data.preferred_make || data.preferredMake || '';
-          const preferredModel = data.preferred_model || data.preferredModel || data.preferredVehicle || '';
-          const notesText = data.notes || (preferredModel ? `Customer enquiring about ${preferredModel}.` : 'Customer registered from Customer Directory.');
-
-          if (!existingLeads || existingLeads.length === 0) {
-            // Automatically insert a new enquiry lead so it immediately appears in Pipeline "New Enquiries"
-            const leadId = randomUUID();
-            await supabaseAdmin.from('leads').insert({
-              id: leadId,
-              tenant_id: tenantId,
-              branch_id: resolvedBranchId,
-              customer_id: customerId,
-              source: data.source || 'Showroom Customer Registration',
-              status: 'new', // Enters pipeline in "New Enquiries"
-              assigned_to: assignedToUuid,
-              budget_min: Number(data.budget_min || data.budgetMin) || 1200000,
-              budget_max: Number(data.budget_max || data.budgetMax) || 2000000,
-              preferred_make: preferredMake,
-              preferred_model: preferredModel,
-              preferred_fuel_type: data.preferred_fuel_type || data.preferredFuelType || 'Petrol',
-              score: 85,
-              notes: notesText,
-              next_action_at: new Date(Date.now() + 86400000 * 2).toISOString(),
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-            });
-          } else if (assignedToUuid || preferredModel) {
-            // Update assigned consultant or vehicle preferences on existing lead
-            const updatePayload: any = { updated_at: new Date().toISOString() };
-            if (assignedToUuid) updatePayload.assigned_to = assignedToUuid;
-            if (preferredModel) updatePayload.preferred_model = preferredModel;
-            await supabaseAdmin.from('leads').update(updatePayload).eq('id', existingLeads[0].id);
-          }
-        }
         break;
       }
 
@@ -445,7 +355,7 @@ export async function POST(req: NextRequest) {
         // If customer ID is not a valid UUID or not yet in database, create or find customer
         if (!custId || !isUuid(custId)) {
           custId = randomUUID();
-          const fullName = String(data.customer_name || data.customerName || 'Lead Contact').trim();
+          const fullName = cleanNamePart(data.customer_name || data.customerName) || 'Walk-in Lead';
           const nameParts = fullName.split(/\s+/);
           await supabaseAdmin.from('customers').upsert(
             {
@@ -453,8 +363,8 @@ export async function POST(req: NextRequest) {
               tenant_id: tenantId,
               branch_id: resolvedBranchId,
               type: 'individual',
-              first_name: nameParts[0] || 'Lead',
-              last_name: nameParts.slice(1).join(' ') || '',
+              first_name: cleanNamePart(nameParts[0]) || 'Lead',
+              last_name: nameParts.slice(1).map(cleanNamePart).filter(Boolean).join(' '),
               phone: data.customer_phone || data.customerPhone || '',
               email: data.customer_email || data.customerEmail || null,
               updated_at: new Date().toISOString(),
@@ -470,7 +380,7 @@ export async function POST(req: NextRequest) {
             .maybeSingle();
 
           if (!existingCust) {
-            const fullName = String(data.customer_name || data.customerName || 'Lead Contact').trim();
+            const fullName = cleanNamePart(data.customer_name || data.customerName) || 'Walk-in Lead';
             const nameParts = fullName.split(/\s+/);
             await supabaseAdmin.from('customers').upsert(
               {
@@ -478,8 +388,8 @@ export async function POST(req: NextRequest) {
                 tenant_id: tenantId,
                 branch_id: resolvedBranchId,
                 type: 'individual',
-                first_name: nameParts[0] || 'Lead',
-                last_name: nameParts.slice(1).join(' ') || '',
+                first_name: cleanNamePart(nameParts[0]) || 'Lead',
+                last_name: nameParts.slice(1).map(cleanNamePart).filter(Boolean).join(' '),
                 phone: data.customer_phone || data.customerPhone || '',
                 email: data.customer_email || data.customerEmail || null,
                 updated_at: new Date().toISOString(),
@@ -510,15 +420,17 @@ export async function POST(req: NextRequest) {
           tenant_id: tenantId,
           branch_id: resolvedBranchId,
           customer_id: custId,
-          source: data.source || 'Showroom Walk-in',
+          source: data.source || 'Pipeline',
           status: newStatus,
           assigned_to: assignedToUuid,
           budget_min: Number(data.budget_min || data.budgetMin) || 0,
           budget_max: Number(data.budget_max || data.budgetMax) || 0,
-          preferred_make: data.preferred_make || data.preferredMake || '',
-          preferred_model: data.preferred_model || data.preferredModel || '',
-          preferred_fuel_type: data.preferred_fuel_type || data.preferredFuelType || 'Petrol',
-          score: Number(data.score) || 75,
+          preferred_make: data.preferred_make === 'Enquiry' ? '' : (data.preferred_make || data.preferredMake || ''),
+          preferred_model: ['Enquiry', 'Vehicle Enquiry', 'Showroom Vehicle'].includes(data.preferred_model || data.preferredModel)
+            ? ''
+            : (data.preferred_model || data.preferredModel || ''),
+          preferred_fuel_type: data.preferred_fuel_type || data.preferredFuelType || '',
+          score: data.score !== undefined && data.score !== null && data.score !== '' ? Number(data.score) || 0 : 0,
           notes: data.notes || '',
           custom_fields: customFields,
           next_action_at: data.next_action_at || data.nextActionAt || null,
@@ -607,8 +519,8 @@ export async function POST(req: NextRequest) {
                   branch_id: resolvedBranchId,
                   stock_number: `STK-${Date.now().toString().slice(-4)}`,
                   vin: `VIN-${Date.now()}`,
-                  make: data.preferred_make || 'Vehicle',
-                  model: data.preferred_model || 'Showroom Vehicle',
+                  make: data.preferred_make || '',
+                  model: data.preferred_model || '',
                   variant: 'Standard',
                   year: new Date().getFullYear(),
                   status: 'available',
@@ -950,25 +862,6 @@ export async function POST(req: NextRequest) {
 
           if (existingTargetLead?.id) {
             await supabaseAdmin.from('leads').update(leadUpdates).eq('id', existingTargetLead.id);
-          } else if (customerId) {
-            await supabaseAdmin.from('leads').insert({
-              id: randomUUID(),
-              tenant_id: tenantId,
-              branch_id: resolvedBranchId,
-              customer_id: customerId,
-              source: 'Appointment Desk',
-              status: 'new',
-              assigned_to: assignedToUuid,
-              preferred_make: '',
-              preferred_model: resolvedVehicleName || 'Showroom Vehicle',
-              budget_min: 1200000,
-              budget_max: 2000000,
-              score: 85,
-              notes: data.notes ? `Appointment: ${data.notes}` : 'Appointment booked',
-              next_action_at: isoScheduledAt,
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-            });
           }
         }
         break;
@@ -979,7 +872,7 @@ export async function POST(req: NextRequest) {
         let customerId = data.customer_id || data.customerId;
         if (!customerId || !isUuid(customerId)) {
           customerId = randomUUID();
-          const fullName = String(data.customer_name || data.customerName || 'Test Drive Client').trim();
+          const fullName = cleanNamePart(data.customer_name || data.customerName) || 'Test Drive Client';
           const nameParts = fullName.split(/\s+/);
           await supabaseAdmin.from('customers').upsert(
             {
@@ -987,8 +880,8 @@ export async function POST(req: NextRequest) {
               tenant_id: tenantId,
               branch_id: resolvedBranchId,
               type: 'individual',
-              first_name: nameParts[0] || 'Client',
-              last_name: nameParts.slice(1).join(' ') || '',
+              first_name: cleanNamePart(nameParts[0]) || 'Client',
+              last_name: nameParts.slice(1).map(cleanNamePart).filter(Boolean).join(' '),
               phone: data.customer_phone || data.customerPhone || '',
               email: data.customer_email || data.customerEmail || null,
               updated_at: new Date().toISOString(),
@@ -1102,6 +995,44 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: true, entity, data: result });
   } catch (err: any) {
     console.error('[API/crm] Unexpected error:', err);
+    return NextResponse.json({ error: err?.message || 'Server error' }, { status: 500 });
+  }
+}
+
+// DELETE: Delete a CRM record strictly scoped to caller's tenant
+export async function DELETE(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if ('errorResponse' in auth) return auth.errorResponse;
+
+  if (!isServerSupabaseConfigured()) {
+    return NextResponse.json({ error: 'Supabase is not configured' }, { status: 503 });
+  }
+
+  const tenantId = auth.session.tenantId;
+  const { searchParams } = new URL(req.url);
+  const entity = searchParams.get('entity') || 'lead';
+  const id = searchParams.get('id');
+
+  if (!id || !isUuid(id)) {
+    return NextResponse.json({ error: 'Valid record id is required' }, { status: 400 });
+  }
+
+  try {
+    if (entity === 'lead') {
+      const { error } = await supabaseAdmin
+        .from('leads')
+        .delete()
+        .eq('id', id)
+        .eq('tenant_id', tenantId);
+      if (error) {
+        return NextResponse.json({ error: error.message }, { status: 400 });
+      }
+      return NextResponse.json({ success: true, entity, id });
+    }
+
+    return NextResponse.json({ error: `Unsupported delete entity: ${entity}` }, { status: 400 });
+  } catch (err: any) {
+    console.error('[API/crm] Unexpected delete error:', err);
     return NextResponse.json({ error: err?.message || 'Server error' }, { status: 500 });
   }
 }

@@ -131,7 +131,6 @@ export default function LeadsPage() {
 
     const syncFromActivities = (drivesList = getTestDrives()) => {
       api.reconcilePipelineFromActivities(drivesList);
-      api.ensureCustomerLeads();
       setLeads([...api.getLeads()]);
       setCustomers([...api.getCustomers()]);
       setBranches([...api.getBranches()]);
@@ -158,7 +157,6 @@ export default function LeadsPage() {
       if (Array.isArray(remoteApts)) setAppointments(remoteApts);
       if (Array.isArray(remoteBranches)) setBranches(remoteBranches);
       if (Array.isArray(remoteCusts) && remoteCusts.length > 0) setCustomers(remoteCusts);
-      api.ensureCustomerLeads();
       syncFromActivities(Array.isArray(remoteDrives) ? remoteDrives : getTestDrives());
       setLeads([...api.getLeads()]);
       setCustomers([...api.getCustomers()]);
@@ -228,13 +226,21 @@ export default function LeadsPage() {
     setIsNewLeadModalOpen(true);
   };
 
+  const handleDeleteLead = (leadId: string) => {
+    api.deleteLead(leadId);
+    setLeads([...api.getLeads()]);
+    if (selectedLead?.id === leadId) {
+      setSelectedLead(null);
+    }
+  };
+
   const handleStartEditLead = (lead: Lead) => {
     setEditingLeadId(lead.id);
     setFormStage(lead.status);
     setFormData({
       customerId: lead.customerId || '',
       branchId: lead.branchId || '',
-      source: lead.source || 'Walk-in Showroom',
+      source: lead.source || '',
       preferredMake: lead.preferredMake || '',
       preferredModel: lead.preferredModel || '',
       preferredFuelType: lead.preferredFuelType || '',
@@ -302,8 +308,8 @@ export default function LeadsPage() {
     if (editingLeadId) {
       api.updateLead(editingLeadId, {
         ...formData,
-        budgetMin: formData.budgetMin ? Number(formData.budgetMin) : undefined,
-        budgetMax: formData.budgetMax ? Number(formData.budgetMax) : undefined,
+        budgetMin: formData.budgetMin ? Number(formData.budgetMin) : 0,
+        budgetMax: formData.budgetMax ? Number(formData.budgetMax) : 0,
         status: formStage as LeadStatus,
         notes: combinedNotes || formData.notes,
         assignedTo: formData.assignedTo || undefined,
@@ -710,38 +716,78 @@ export default function LeadsPage() {
                         <div className="kanban-card-top">
                           <div className="kanban-card-title-group">
                             <GripVertical size={14} className="kanban-grip-icon" />
-                            <span className="kanban-customer-name">{lead.customerName}</span>
+                            <span className="kanban-customer-name">
+                              {lead.customerName && lead.customerName !== 'undefined undefined'
+                                ? lead.customerName
+                                : 'Walk-in Lead'}
+                            </span>
                           </div>
-                          <span
-                            className="kanban-score-pill"
-                            style={{
-                              color: (lead.score || 0) >= 80 ? '#15803D' : stage.accent,
-                              borderColor: (lead.score || 0) >= 80 ? 'rgba(22, 163, 74, 0.3)' : stage.border,
-                            }}
-                          >
-                            <Sparkles size={11} style={{ color: (lead.score || 0) >= 80 ? '#16A34A' : stage.accent }} />
-                            {lead.score}
-                          </span>
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+                            {(lead.score || 0) > 0 && (
+                              <span
+                                className="kanban-score-pill"
+                                style={{
+                                  color: (lead.score || 0) >= 80 ? '#15803D' : stage.accent,
+                                  borderColor: (lead.score || 0) >= 80 ? 'rgba(22, 163, 74, 0.3)' : stage.border,
+                                }}
+                              >
+                                <Sparkles size={11} style={{ color: (lead.score || 0) >= 80 ? '#16A34A' : stage.accent }} />
+                                {lead.score}
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteLead(lead.id);
+                              }}
+                              title="Remove lead from pipeline"
+                              aria-label="Remove lead from pipeline"
+                              style={{
+                                width: '24px',
+                                height: '24px',
+                                borderRadius: '6px',
+                                border: '1px solid #FECACA',
+                                backgroundColor: '#FEF2F2',
+                                color: '#DC2626',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                cursor: 'pointer',
+                                flexShrink: 0,
+                              }}
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
                         </div>
 
-                        {/* Vehicle Interest Pill */}
-                        <div className="kanban-vehicle-tag">
-                          <Car size={13} style={{ color: stage.accent, flexShrink: 0 }} />
-                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {lead.preferredMake} {lead.preferredModel}
-                          </span>
-                          {lead.preferredFuelType && (
-                            <span style={{ fontSize: '0.7rem', color: 'var(--muted)', marginLeft: 'auto' }}>
-                              · {lead.preferredFuelType}
+                        {/* Vehicle Interest Pill (only rendered when specified) */}
+                        {(lead.preferredMake || lead.preferredModel || lead.preferredFuelType) && (
+                          <div className="kanban-vehicle-tag">
+                            <Car size={13} style={{ color: stage.accent, flexShrink: 0 }} />
+                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {[lead.preferredMake, lead.preferredModel].filter(Boolean).join(' ') || 'Vehicle Requirement'}
                             </span>
-                          )}
-                        </div>
+                            {lead.preferredFuelType && (
+                              <span style={{ fontSize: '0.7rem', color: 'var(--muted)', marginLeft: 'auto' }}>
+                                · {lead.preferredFuelType}
+                              </span>
+                            )}
+                          </div>
+                        )}
 
                         {/* Footer: Budget & Sales Exec */}
                         <div className="kanban-card-footer" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px' }}>
-                          <span className="kanban-budget-label">
-                            Budget: ₹{((lead.budgetMin || 0) / 100000).toFixed(0)}-{((lead.budgetMax || 0) / 100000).toFixed(0)}L
-                          </span>
+                          {(lead.budgetMin || 0) > 0 || (lead.budgetMax || 0) > 0 ? (
+                            <span className="kanban-budget-label">
+                              Budget: ₹{((lead.budgetMin || 0) / 100000).toFixed(0)}-{((lead.budgetMax || lead.budgetMin || 0) / 100000).toFixed(0)}L
+                            </span>
+                          ) : (
+                            <span className="kanban-budget-label" style={{ color: '#94A3B8', fontWeight: 500 }}>
+                              {lead.source || 'Direct Lead'}
+                            </span>
+                          )}
                           <span
                             className="kanban-assignee-pill"
                             title={`Assigned Consultant: ${lead.assigneeName || 'Unassigned'}`}
@@ -1948,7 +1994,7 @@ export default function LeadsPage() {
         <Modal
           isOpen={!!selectedLead}
           onClose={() => setSelectedLead(null)}
-          title={`Lead: ${selectedLead.customerName}`}
+          title={`Lead: ${selectedLead.customerName && selectedLead.customerName !== 'undefined undefined' ? selectedLead.customerName : 'Walk-in Lead'}`}
           headerActions={
             <div className="modal-header-actions">
               <button
@@ -1959,6 +2005,15 @@ export default function LeadsPage() {
               >
                 <Edit3 size={14} />
                 <span>Edit</span>
+              </button>
+              <button
+                type="button"
+                className="modal-header-btn-delete"
+                onClick={() => handleDeleteLead(selectedLead.id)}
+                title="Delete lead from pipeline"
+              >
+                <Trash2 size={14} />
+                <span>Delete</span>
               </button>
               <button
                 type="button"
@@ -2067,19 +2122,30 @@ export default function LeadsPage() {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
               <div>
                 <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>Requirement:</span>
-                <div style={{ fontWeight: 600 }}>{selectedLead.preferredMake} {selectedLead.preferredModel} ({selectedLead.preferredFuelType})</div>
+                <div style={{ fontWeight: 600 }}>
+                  {[selectedLead.preferredMake, selectedLead.preferredModel].filter(Boolean).join(' ') || 'Not specified'}
+                  {selectedLead.preferredFuelType ? ` (${selectedLead.preferredFuelType})` : ''}
+                </div>
               </div>
               <div>
                 <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>Budget:</span>
-                <div style={{ fontWeight: 600 }}>₹{(selectedLead.budgetMin! / 100000).toFixed(1)}L - ₹{(selectedLead.budgetMax! / 100000).toFixed(1)}L</div>
+                <div style={{ fontWeight: 600 }}>
+                  {(selectedLead.budgetMin || 0) > 0 || (selectedLead.budgetMax || 0) > 0
+                    ? `₹${((selectedLead.budgetMin || 0) / 100000).toFixed(1)}L - ₹${((selectedLead.budgetMax || selectedLead.budgetMin || 0) / 100000).toFixed(1)}L`
+                    : 'Not specified'}
+                </div>
               </div>
               <div>
                 <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>Assigned Sales Exec:</span>
-                <div style={{ fontWeight: 600 }}>{selectedLead.assigneeName || 'Unassigned Consultant'}</div>
+                <div style={{ fontWeight: 600 }}>
+                  {selectedLead.assigneeName && selectedLead.assigneeName !== 'Unassigned Consultant'
+                    ? selectedLead.assigneeName
+                    : 'Unassigned'}
+                </div>
               </div>
               <div>
                 <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>Lead Source:</span>
-                <div style={{ fontWeight: 600 }}>{selectedLead.source}</div>
+                <div style={{ fontWeight: 600 }}>{selectedLead.source || 'Direct'}</div>
               </div>
             </div>
 
@@ -2195,11 +2261,13 @@ export default function LeadsPage() {
                     </div>
                     <div>
                       <span style={{ fontSize: '0.72rem', color: '#78350F', display: 'block' }}>Demo Vehicle:</span>
-                      <strong style={{ color: '#1E293B' }}>{activeAppointment.vehicle_name || activeAppointment.vehicleName || `${selectedLead.preferredMake} ${selectedLead.preferredModel}`}</strong>
+                      <strong style={{ color: '#1E293B' }}>
+                        {activeAppointment.vehicle_name || activeAppointment.vehicleName || [selectedLead.preferredMake, selectedLead.preferredModel].filter(Boolean).join(' ') || 'Not specified'}
+                      </strong>
                     </div>
                     <div style={{ gridColumn: 'span 2' }}>
                       <span style={{ fontSize: '0.72rem', color: '#78350F', display: 'block' }}>Assigned Host / Showroom Consultant:</span>
-                      <strong style={{ color: '#4338CA' }}>👤 {activeAppointment.assignee_name || activeAppointment.assignedToName || selectedLead.assigneeName || 'Assigned Consultant'}</strong>
+                      <strong style={{ color: '#4338CA' }}>👤 {activeAppointment.assignee_name || activeAppointment.assignedToName || selectedLead.assigneeName || 'Unassigned'}</strong>
                     </div>
                   </div>
 

@@ -131,13 +131,22 @@ export default function EmployeeLoginPage() {
       tenantId: emp.tenantId,
     });
 
-    // Save authentic dealership profile to localStorage for session persistence
-    if (company && (company.tradeName || company.legalName)) {
-      saveCompanyProfile({
-        ...DEFAULT_COMPANY_PROFILE,
-        ...company,
-        id: emp.tenantId || DEFAULT_COMPANY_PROFILE.id,
-      });
+    // Save authentic dealership profile to tenant-scoped localStorage for refresh & session persistence
+    if (company && (company.tradeName || company.legalName || company.logoUrl)) {
+      if (typeof window !== 'undefined' && emp.tenantId && emp.id) {
+        try {
+          localStorage.setItem(`crm_emp_tenant_${emp.id}`, emp.tenantId);
+        } catch {}
+      }
+      saveCompanyProfile(
+        {
+          ...DEFAULT_COMPANY_PROFILE,
+          ...company,
+          id: emp.tenantId ? `company_${emp.tenantId}` : DEFAULT_COMPANY_PROFILE.id,
+          isOnboarded: true,
+        },
+        { skipRemoteSync: true, tenantId: emp.tenantId }
+      );
     }
 
     setWorkflowStep('success');

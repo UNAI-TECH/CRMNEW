@@ -21,6 +21,46 @@ import { PricingEngine } from '@crm/business-rules';
 import { supabase, isSupabaseConfigured } from './supabase.ts';
 import { getActiveTenantId, getScopedKey, SESSION_KEY } from './tenant-context.ts';
 
+function cleanNameSegment(val: unknown): string {
+  if (val === undefined || val === null) return '';
+  const trimmed = String(val).trim();
+  if (!trimmed || trimmed.toLowerCase() === 'undefined' || trimmed.toLowerCase() === 'null') {
+    return '';
+  }
+  return trimmed;
+}
+
+function formatCustomerFullName(cust?: {
+  firstName?: unknown;
+  lastName?: unknown;
+  first_name?: unknown;
+  last_name?: unknown;
+} | null): string {
+  if (!cust) return '';
+  const first = cleanNameSegment(cust.firstName ?? cust.first_name);
+  const last = cleanNameSegment(cust.lastName ?? cust.last_name);
+  return [first, last].filter(Boolean).join(' ').trim();
+}
+
+function sanitizeLeadVehicleField(val: unknown, blockedValues: string[]): string {
+  const s = cleanNameSegment(val);
+  return blockedValues.includes(s) ? '' : s;
+}
+
+function isPhantomLeadRecord(l: any): boolean {
+  if (!l) return false;
+  const name = cleanNameSegment(l.customerName ?? l.customer_name).toLowerCase();
+  const make = String(l.preferredMake ?? l.preferred_make ?? '').trim();
+  const model = String(l.preferredModel ?? l.preferred_model ?? '').trim();
+  const source = String(l.source ?? '').trim();
+  if (name === 'undefined undefined' || name === 'undefined') return true;
+  if (make === 'Enquiry' && model === 'Vehicle Enquiry') return true;
+  if (source === 'Customer Registration' && (model === 'Enquiry' || model === 'Vehicle Enquiry' || !name)) {
+    return true;
+  }
+  return false;
+}
+
 function isPublicAuthOrLandingPath(pathname?: string): boolean {
   const path = (pathname || '/').trim() || '/';
   return (
@@ -230,7 +270,7 @@ class DataService {
           parsed.customers = parsed.customers.filter((c: any) => !mockCustIds.has(c.id));
         }
         if (Array.isArray(parsed.leads)) {
-          parsed.leads = parsed.leads.filter((l: any) => !mockLeadIds.has(l.id));
+          parsed.leads = parsed.leads.filter((l: any) => !mockLeadIds.has(l.id) && !isPhantomLeadRecord(l));
         }
         if (Array.isArray(parsed.deals)) {
           parsed.deals = parsed.deals.filter((d: any) => !mockDealIds.has(d.id));
@@ -366,28 +406,6 @@ class DataService {
     if (typeof window !== 'undefined' && !hasAuthenticatedClientSession()) return;
     this.isSyncing = true;
     try {
-      if (typeof window !== 'undefined') {
-        const res = await this.fetchCrmEndpoint();
-        if (!res || res.status === 401 || res.status === 403) {
-          return;
-        }
-        if (res.ok) {
-          const json = await res.json();
-          if (Array.isArray(json.customers)) this.data.customers = json.customers;
-          if (Array.isArray(json.vehicles)) this.data.vehicles = json.vehicles;
-          if (Array.isArray(json.leads)) this.data.leads = json.leads;
-          if (Array.isArray(json.deals)) this.data.deals = json.deals;
-          if (Array.isArray(json.appointments)) this.data.appointments = json.appointments;
-          if (Array.isArray(json.employees)) (this.data as any).employees = json.employees;
-          if (Array.isArray(json.quotations)) this.data.quotations = json.quotations;
-          if (Array.isArray(json.invoices)) (this.data as any).invoices = json.invoices;
-          if (Array.isArray(json.payments)) this.data.payments = json.payments;
-          this.ensureCustomerLeads();
-          this.persist();
-          return;
-        }
-      }
-
       await Promise.allSettled([
         this.fetchBranches(),
         this.fetchCustomers(),
@@ -399,7 +417,6 @@ class DataService {
         this.fetchInvoices(),
         this.fetchPayments(),
       ]);
-      this.ensureCustomerLeads();
       this.persist();
     } finally {
       this.isSyncing = false;
@@ -608,7 +625,6 @@ class DataService {
       const remoteIds = new Set(mappedCustomers.map((c) => c.id));
       const unsyncedLocal = this.data.customers.filter((c) => !remoteIds.has(c.id));
       this.data.customers = [...unsyncedLocal, ...mappedCustomers];
-      this.ensureCustomerLeads();
       this.persist();
       return this.data.customers;
     }
@@ -618,14 +634,16 @@ class DataService {
   addCustomer(customerData: Partial<Customer>): Customer {
     const tenantId = getActiveTenantId();
     const customerId = (customerData.id && isUuid(customerData.id)) ? customerData.id : generateUuid();
+    const cleanFirst = cleanNameSegment(customerData.firstName);
+    const cleanLast = cleanNameSegment(customerData.lastName);
 
     const newCust: Customer = {
       id: customerId,
       tenantId: customerData.tenantId || tenantId,
       branchId: customerData.branchId || `b_${tenantId}_main`,
       type: customerData.type || 'individual',
-      firstName: customerData.firstName || 'New',
-      lastName: customerData.lastName || 'Customer',
+      firstName: cleanFirst || (customerData.companyName ? cleanNameSegment(customerData.companyName) : 'Customer'),
+      lastName: cleanLast,
       email: customerData.email,
       phone: customerData.phone || '',
       panNumber: customerData.panNumber,
@@ -650,30 +668,12 @@ class DataService {
     }
 
     this.data.customers.unshift(newCust);
+    this.persist();
 
     const candidateAssignedTo = (customerData as any).assignedTo || null;
     const candidateAssignedToName = (customerData as any).assignedToName || '';
 
-    const customerLead = this.buildLeadFromCustomer(newCust, {
-      id: generateUuid(),
-      source: 'Showroom Customer Registration',
-      score: 85,
-      preferredVehicle: (customerData as any).preferredVehicle,
-      budget: (customerData as any).budget,
-      fuelType: (customerData as any).fuelType,
-      defaultNote: 'New customer registered in CRM.',
-    });
-
-    if (candidateAssignedTo) {
-      customerLead.assignedTo = candidateAssignedTo;
-      customerLead.assigneeName = candidateAssignedToName || 'Assigned Consultant';
-    }
-
-    if (!this.data.leads) this.data.leads = [];
-    this.data.leads.unshift(customerLead);
-    this.persist();
-
-    // Persist Customer and auto-create enquiry Lead in Supabase backend API route
+    // Persist Customer in Supabase backend API route
     if (typeof window !== 'undefined') {
       fetch('/api/crm', {
         method: 'POST',
@@ -693,8 +693,6 @@ class DataService {
       })
         .then(async (res) => {
           if (res.ok) {
-            // Re-fetch backend leads so the new enquiry appears immediately with authentic database IDs
-            await this.fetchLeads();
             window.dispatchEvent(new Event('crm-data-changed'));
           }
         })
@@ -801,23 +799,23 @@ class DataService {
     return this.data.customers;
   }
 
-  // Auto-backfill & ensure every registered customer has an active enquiry lead in "new" (New Enquiries)
+  // Build normalized Lead object from Customer inputs without hardcoded synthetic defaults
   private buildLeadFromCustomer(
     customer: Customer,
     options: {
       id: string;
       source: string;
-      score: number;
+      score?: number;
       preferredVehicle?: string;
       budget?: string;
       fuelType?: string;
-      defaultNote: string;
+      defaultNote?: string;
     }
   ): Lead {
     const rawCar = (options.preferredVehicle || (customer as any).preferredVehicle || '').toString().trim();
     const rawBudget = (options.budget || (customer as any).budget || '').toString().trim();
-    let bMin = 1500000;
-    let bMax = 2500000;
+    let bMin = 0;
+    let bMax = 0;
     if (rawBudget) {
       const nums = rawBudget.match(/[\d.]+/g);
       if (nums && nums.length >= 2) {
@@ -829,8 +827,8 @@ class DataService {
       }
     }
     const parts = rawCar ? rawCar.split(' ') : [];
-    const prefMake = parts[0] || 'Enquiry';
-    const prefModel = parts.slice(1).join(' ') || (rawCar || 'Vehicle Enquiry');
+    const prefMake = parts[0] || '';
+    const prefModel = parts.slice(1).join(' ');
     const tenantId = getActiveTenantId();
 
     const lead: Lead = {
@@ -838,130 +836,39 @@ class DataService {
       tenantId: customer.tenantId || tenantId,
       branchId: customer.branchId || `b_${customer.tenantId || tenantId}_main`,
       customerId: customer.id,
-      source: options.source,
+      source: options.source || '',
       status: 'new',
       assignedTo: (customer as any).assignedTo || '',
       budgetMin: bMin,
       budgetMax: bMax,
       preferredMake: prefMake,
       preferredModel: prefModel,
-      preferredFuelType: options.fuelType || (customer as any).fuelType || 'Petrol',
-      score: options.score,
-      notes: rawCar ? `Customer expressed preference for ${rawCar}.` : options.defaultNote,
+      preferredFuelType: options.fuelType || (customer as any).fuelType || '',
+      score: options.score ?? 0,
+      notes: rawCar ? `Customer expressed preference for ${rawCar}.` : (options.defaultNote || ''),
       nextActionAt: new Date(Date.now() + 86400000 * 2).toISOString(),
       version: 1,
       createdAt: customer.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      customerName: `${customer.firstName} ${customer.lastName}`.trim(),
+      customerName: formatCustomerFullName(customer),
       customer,
-      assigneeName: (customer as any).assignedToName || 'Unassigned Consultant',
-      branchName: 'Main Showroom',
+      assigneeName: (customer as any).assignedToName || '',
+      branchName: '',
     };
     if (customer.phone) (lead as any).customerPhone = customer.phone;
     if (customer.email) (lead as any).customerEmail = customer.email;
     return lead;
   }
 
+  // Disabled synthetic auto-generation of default pipeline leads from Customer Directory
   ensureCustomerLeads(): Lead[] {
-    if (!this.data.customers) return this.data.leads || [];
-    if (!this.data.leads) this.data.leads = [];
-
-    // 1. Identify which customers have already been contacted or advanced in the sales pipeline
-    const contactedCustIds = new Set(
-      this.data.leads
-        .filter(
-          (l) =>
-            (l as any).isContacted ||
-            (l as any).contactedAt ||
-            (Boolean(l.status) && !['new', 'assigned', 'appointment_set', 'test_drive'].includes(l.status)) ||
-            l.notes?.includes('[Moved to')
-        )
-        .map((l) => l.customerId)
-        .filter(Boolean)
-    );
-    const newLeadCustIds = new Set(
-      this.data.leads
-        .filter((l) => l.status === 'new')
-        .map((l) => l.customerId)
-        .filter(Boolean)
-    );
-
-    let changed = false;
-
-    // 2. Ensure every customer appears in "New Enquiries" (status: 'new') until they are contacted
-    for (const cust of this.data.customers) {
-      const fullName = `${cust.firstName} ${cust.lastName}`.toLowerCase().trim();
-
-      if (!contactedCustIds.has(cust.id) && !newLeadCustIds.has(cust.id)) {
-        // Find if this customer has uncontacted leads that were auto-promoted to appointment_set or test_drive
-        const uncontactedLeads = this.data.leads.filter(
-          (l) => l.customerId === cust.id || (l.customerName || '').toLowerCase().trim() === fullName
-        );
-
-        if (uncontactedLeads.length > 0) {
-          // Keep the primary uncontacted lead in "New Enquiries" (status: 'new') with appointment attached
-          const primaryLead = uncontactedLeads[0];
-          if (primaryLead.status !== 'new') {
-            primaryLead.status = 'new';
-            primaryLead.updatedAt = new Date().toISOString();
-            changed = true;
-          }
-          newLeadCustIds.add(cust.id);
-
-          // Deduplicate extra duplicate cards for this uncontacted customer
-          if (uncontactedLeads.length > 1) {
-            const duplicateIds = new Set(uncontactedLeads.slice(1).map((l) => l.id));
-            this.data.leads = this.data.leads.filter((l) => !duplicateIds.has(l.id));
-            changed = true;
-          }
-        } else {
-          // No lead at all — create a new enquiry lead directly in "New Enquiries"
-          const autoLead = this.buildLeadFromCustomer(cust, {
-            id: generateUuid(),
-            source: 'Customer Registration',
-            score: 80,
-            defaultNote: 'New customer enquiry in CRM pipeline.',
-          });
-
-          this.data.leads.unshift(autoLead);
-          changed = true;
-          newLeadCustIds.add(cust.id);
-
-          if (isSupabaseConfigured()) {
-            supabase.from('leads').upsert({
-              id: autoLead.id,
-              tenant_id: autoLead.tenantId,
-              branch_id: autoLead.branchId,
-              customer_id: autoLead.customerId,
-              source: autoLead.source,
-              status: autoLead.status,
-              budget_min: autoLead.budgetMin,
-              budget_max: autoLead.budgetMax,
-              preferred_make: autoLead.preferredMake,
-              preferred_model: autoLead.preferredModel,
-              preferred_fuel_type: autoLead.preferredFuelType,
-              score: autoLead.score,
-              notes: autoLead.notes,
-            }).then(() => {});
-          }
-        }
-      }
+    if (!this.data.leads) {
+      this.data.leads = [];
+      return this.data.leads;
     }
-
-    // 3. Prune/reset orphan leads that ended up in appointment_set or test_drive without any actual appointments or test drives
-    for (const l of this.data.leads) {
-      if ((l.status === 'appointment_set' || l.status === 'test_drive') && !l.notes?.includes('[Moved to')) {
-        const isContacted = l.customerId && contactedCustIds.has(l.customerId);
-        const hasAppointment = (l as any).appointment || (this.data.appointments || []).some((a) => a.leadId === l.id || (l.customerId && a.customerId === l.customerId && a.status !== 'cancelled'));
-        if (!isContacted && !hasAppointment) {
-          l.status = 'new';
-          l.updatedAt = new Date().toISOString();
-          changed = true;
-        }
-      }
-    }
-
-    if (changed) {
+    const beforeLen = this.data.leads.length;
+    this.data.leads = this.data.leads.filter((l) => !isPhantomLeadRecord(l));
+    if (this.data.leads.length !== beforeLen) {
       this.persist();
     }
     return this.data.leads;
@@ -971,8 +878,8 @@ class DataService {
   // Leads
   // ==========================================
   getLeads(): Lead[] {
-    this.ensureCustomerLeads();
-    return this.data.leads;
+    if (!this.data.leads) this.data.leads = [];
+    return this.data.leads.filter((l) => !isPhantomLeadRecord(l));
   }
 
   async fetchLeads(): Promise<Lead[]> {
@@ -999,8 +906,8 @@ class DataService {
                 tenantId: rc.tenant_id || tenantId,
                 branchId: rc.branch_id || `b_${tenantId}_main`,
                 type: rc.type || 'individual',
-                firstName: rc.first_name || 'Customer',
-                lastName: rc.last_name || '',
+                firstName: cleanNameSegment(rc.first_name) || cleanNameSegment(rc.company_name) || 'Customer',
+                lastName: cleanNameSegment(rc.last_name),
                 email: rc.email || undefined,
                 phone: rc.phone || '',
                 address: rc.address || { city: rc.city || '' },
@@ -1035,70 +942,72 @@ class DataService {
     }
 
     if (data && Array.isArray(data)) {
-      const remoteLeads: Lead[] = data.map((r: any) => {
-        const cust =
-          this.data.customers.find((c) => c.id === r.customer_id) ||
-          remoteCustomers.find((c) => c.id === r.customer_id);
-        const custFirst = cust?.firstName || cust?.first_name || '';
-        const custLast = cust?.lastName || cust?.last_name || '';
-        const custFullName = `${custFirst} ${custLast}`.trim();
+      const remoteLeads: Lead[] = data
+        .map((r: any) => {
+          const cust =
+            this.data.customers.find((c) => c.id === r.customer_id) ||
+            remoteCustomers.find((c) => c.id === r.customer_id);
+          const custFullName = formatCustomerFullName(cust);
+          const resolvedName = cleanNameSegment(r.customer_name) || custFullName;
 
-        const resolvedStatus =
-          typeof r.timeline === 'string' && r.timeline.startsWith('__stage__:')
-            ? (r.timeline.slice('__stage__:'.length) || r.status || 'new')
-            : (r.status || 'new');
-
-        const mappedLead: Lead = {
-          id: r.id,
-          tenantId: r.tenant_id || tenantId,
-          branchId: r.branch_id || `b_${tenantId}_main`,
-          customerId: r.customer_id,
-          source: r.source || 'Showroom Walk-in',
-          status: resolvedStatus,
-          assignedTo: r.assigned_to || '',
-          budgetMin: Number(r.budget_min) || 1500000,
-          budgetMax: Number(r.budget_max) || 2000000,
-          preferredMake: r.preferred_make || '',
-          preferredModel: r.preferred_model || '',
-          preferredFuelType: r.preferred_fuel_type || 'Petrol',
-          timeline:
+          const resolvedStatus =
             typeof r.timeline === 'string' && r.timeline.startsWith('__stage__:')
-              ? ''
-              : (r.timeline || 'Within 7 days'),
-          score: Number(r.score) || 75,
-          notes: r.notes || '',
-          nextActionAt: r.next_action_at || new Date(Date.now() + 86400000 * 2).toISOString(),
-          version: r.version || 1,
-          createdAt: r.created_at || new Date().toISOString(),
-          updatedAt: r.updated_at || new Date().toISOString(),
-          customerName: r.customer_name || custFullName || (r.preferred_model ? `Buyer for ${r.preferred_model}` : 'Walk-in Client'),
-          customer: cust,
-          assigneeName: r.assignee_name || r.assigneeName || (r.assigned_to ? 'Assigned Consultant' : 'Unassigned Consultant'),
-          branchName: r.branch_name || '',
-        };
-        if (r.custom_fields && typeof r.custom_fields === 'object') {
-          (mappedLead as any).customFields = r.custom_fields;
-        } else if (r.customFields && typeof r.customFields === 'object') {
-          (mappedLead as any).customFields = r.customFields;
-        }
-        if (cust?.phone) (mappedLead as any).customerPhone = cust.phone;
-        if (cust?.email) (mappedLead as any).customerEmail = cust.email;
-        if (r.appointment || r.appointment_details) {
-          (mappedLead as any).appointment = r.appointment || r.appointment_details;
-        }
-        return mappedLead;
-      });
+              ? (r.timeline.slice('__stage__:'.length) || r.status || 'new')
+              : (r.status || 'new');
+
+          const prefMake = sanitizeLeadVehicleField(r.preferred_make, ['Enquiry']);
+          const prefModel = sanitizeLeadVehicleField(r.preferred_model, ['Enquiry', 'Vehicle Enquiry', 'Showroom Vehicle']);
+
+          const mappedLead: Lead = {
+            id: r.id,
+            tenantId: r.tenant_id || tenantId,
+            branchId: r.branch_id || `b_${tenantId}_main`,
+            customerId: r.customer_id,
+            source: r.source || '',
+            status: resolvedStatus,
+            assignedTo: r.assigned_to || '',
+            budgetMin: Number(r.budget_min) || 0,
+            budgetMax: Number(r.budget_max) || 0,
+            preferredMake: prefMake,
+            preferredModel: prefModel,
+            preferredFuelType: r.preferred_fuel_type || '',
+            timeline:
+              typeof r.timeline === 'string' && r.timeline.startsWith('__stage__:')
+                ? ''
+                : (r.timeline || ''),
+            score: Number(r.score) || 0,
+            notes: r.notes || '',
+            nextActionAt: r.next_action_at || '',
+            version: r.version || 1,
+            createdAt: r.created_at || new Date().toISOString(),
+            updatedAt: r.updated_at || new Date().toISOString(),
+            customerName: resolvedName || (prefModel ? `Buyer (${prefModel})` : 'Walk-in Lead'),
+            customer: cust,
+            assigneeName: r.assignee_name || r.assigneeName || (r.assigned_to ? 'Assigned Staff' : ''),
+            branchName: r.branch_name || '',
+          };
+          if (r.custom_fields && typeof r.custom_fields === 'object') {
+            (mappedLead as any).customFields = r.custom_fields;
+          } else if (r.customFields && typeof r.customFields === 'object') {
+            (mappedLead as any).customFields = r.customFields;
+          }
+          if (cust?.phone) (mappedLead as any).customerPhone = cust.phone;
+          if (cust?.email) (mappedLead as any).customerEmail = cust.email;
+          if (r.appointment || r.appointment_details) {
+            (mappedLead as any).appointment = r.appointment || r.appointment_details;
+          }
+          return mappedLead;
+        })
+        .filter((l) => !isPhantomLeadRecord(l));
 
       const remoteIds = new Set(remoteLeads.map((l) => l.id));
-      const unsyncedLocal = this.data.leads.filter((l) => !remoteIds.has(l.id));
+      const unsyncedLocal = this.data.leads.filter((l) => !remoteIds.has(l.id) && !isPhantomLeadRecord(l));
       this.data.leads = [...unsyncedLocal, ...remoteLeads];
-      this.ensureCustomerLeads();
       this.persist();
       return this.data.leads;
     }
 
-    this.ensureCustomerLeads();
-    return this.data.leads;
+    return this.getLeads();
   }
 
   addLead(leadData: any): Lead {
@@ -1106,29 +1015,33 @@ class DataService {
     const branch = this.data.branches.find((b) => b.id === leadData.branchId);
     const tenantId = getActiveTenantId();
     const leadId = (leadData.id && isUuid(leadData.id)) ? leadData.id : generateUuid();
+    const resolvedCustName =
+      cleanNameSegment(leadData.customerName) ||
+      formatCustomerFullName(cust) ||
+      'Walk-in Lead';
 
     const newLead: Lead = {
       id: leadId,
       tenantId: leadData.tenantId || tenantId,
       branchId: leadData.branchId || `b_${tenantId}_main`,
-      customerId: leadData.customerId || (this.data.customers[0]?.id || generateUuid()),
-      source: leadData.source || 'Website',
+      customerId: leadData.customerId || generateUuid(),
+      source: leadData.source || '',
       status: leadData.status || 'new',
       assignedTo: leadData.assignedTo || leadData.assigned_to || '',
-      budgetMin: Number(leadData.budgetMin) || 1500000,
-      budgetMax: Number(leadData.budgetMax) || 2000000,
+      budgetMin: Number(leadData.budgetMin) || 0,
+      budgetMax: Number(leadData.budgetMax) || 0,
       preferredMake: leadData.preferredMake || '',
       preferredModel: leadData.preferredModel || '',
-      preferredFuelType: leadData.preferredFuelType || 'Petrol',
-      score: Number(leadData.score) || 75,
+      preferredFuelType: leadData.preferredFuelType || '',
+      score: Number(leadData.score) || 0,
       notes: leadData.notes || '',
-      nextActionAt: new Date(Date.now() + 86400000 * 2).toISOString(),
+      nextActionAt: leadData.nextActionAt || new Date(Date.now() + 86400000 * 2).toISOString(),
       version: 1,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      customerName: leadData.customerName || (cust ? `${cust.firstName} ${cust.lastName}` : 'Walk-in Customer'),
+      customerName: resolvedCustName,
       customer: cust,
-      assigneeName: leadData.assigneeName || leadData.assignedToName || (leadData.assignedTo ? 'Assigned Staff' : 'Unassigned Consultant'),
+      assigneeName: leadData.assigneeName || leadData.assignedToName || (leadData.assignedTo ? 'Assigned Staff' : ''),
       branchName: branch ? branch.name : '',
     };
     if (leadData.customFields && typeof leadData.customFields === 'object') {
@@ -1296,8 +1209,20 @@ class DataService {
   }
 
   deleteLead(id: string): Lead[] {
-    this.data.leads = this.data.leads.filter((l) => l.id !== id);
+    this.data.leads = (this.data.leads || []).filter((l) => l.id !== id);
     this.persist();
+
+    if (typeof window !== 'undefined' && hasAuthenticatedClientSession()) {
+      fetch(`/api/crm?entity=lead&id=${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+      })
+        .then((res) => {
+          if (res.ok) {
+            window.dispatchEvent(new Event('crm-data-changed'));
+          }
+        })
+        .catch((err) => console.warn('[API] Server deleteLead note:', err));
+    }
 
     if (isSupabaseConfigured()) {
       supabase.from('leads').delete().eq('id', id).then(({ error }) => {
@@ -1873,16 +1798,20 @@ class DataService {
       return existingLead;
     }
 
-    // No existing lead — create one in "New Enquiries" unless explicitly forced past initial stage
+    // Do not auto-create synthetic default pipeline leads during background reconciliation
+    if (!opts.forceStage) {
+      return null;
+    }
+
     const newLead = this.addLead({
       customerId: opts.customerId,
-      customerName: opts.customerName || 'Walk-in Client',
+      customerName: cleanNameSegment(opts.customerName),
       customerPhone: opts.customerPhone || '',
       customerEmail: opts.customerEmail || '',
       source: opts.source || (opts.targetStage === 'test_drive' ? 'Test Drive Desk' : 'Appointment Desk'),
-      status: opts.forceStage ? opts.targetStage : 'new',
-      preferredMake: prefMake || 'Showroom',
-      preferredModel: prefModel || 'Enquiry',
+      status: opts.targetStage,
+      preferredMake: prefMake,
+      preferredModel: prefModel,
       notes: opts.notes || '',
       nextActionAt: opts.nextActionAt,
     });
@@ -1893,12 +1822,10 @@ class DataService {
   }
 
   /**
-   * Reconciles all active appointments and test drives into the Sales Pipeline
-   * so records created from /crm/appointments or /test-drives always appear in
-   * their corresponding Pipeline columns (`appointment_set` and `test_drive`).
+   * Reconciles active appointments and test drives with existing leads in the Sales Pipeline.
    */
   reconcilePipelineFromActivities(testDrives: any[] = []): void {
-    // 1. Reconcile active Appointments -> appointment_set
+    // 1. Reconcile active Appointments with existing leads
     for (const apt of this.data.appointments) {
       if (apt.status === 'cancelled') continue;
       const cust = this.data.customers.find((c) => c.id === apt.customerId);
@@ -1906,7 +1833,7 @@ class DataService {
       this.syncLeadStageForActivity({
         leadId: apt.leadId,
         customerId: apt.customerId,
-        customerName: apt.customerName || (cust ? `${cust.firstName} ${cust.lastName}`.trim() : undefined),
+        customerName: cleanNameSegment(apt.customerName) || formatCustomerFullName(cust) || undefined,
         customerPhone: cust?.phone,
         customerEmail: cust?.email,
         vehicleMake: veh?.make,

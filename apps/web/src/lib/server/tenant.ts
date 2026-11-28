@@ -166,6 +166,7 @@ export async function fetchCompanyProfileWithModules(params: {
   tenantId?: string | null;
   email?: string | null;
   authUserId?: string | null;
+  allowTenantSharedAccess?: boolean;
 }): Promise<{ profile: any | null; modules: any[]; isOnboarded: boolean }> {
   const loadModules = async (tid: string) => {
     const { data } = await supabaseAdmin
@@ -176,7 +177,32 @@ export async function fetchCompanyProfileWithModules(params: {
     return data || [];
   };
 
-  // 1. Direct authoritative lookup by authenticated auth_user_id (prevents cross-tenant leakages)
+  // 1. Authoritative lookup by verified tenantId (supports both admins and staff members of that dealership)
+  if (params.tenantId && params.tenantId !== 't_default') {
+    const { data: tenantProfiles } = await supabaseAdmin
+      .from('company_profiles')
+      .select('*')
+      .eq('tenant_id', params.tenantId)
+      .order('updated_at', { ascending: false })
+      .limit(5);
+
+    const onboarded = tenantProfiles?.find((p) =>
+      isCompanyProfileOnboarded(p) &&
+      (params.allowTenantSharedAccess || !params.authUserId || !p.auth_user_id || p.auth_user_id === params.authUserId)
+    );
+    if (onboarded) {
+      return {
+        profile: onboarded,
+        modules: await loadModules(onboarded.tenant_id),
+        isOnboarded: true,
+      };
+    }
+    if (!params.email && !params.authUserId) {
+      return { profile: tenantProfiles?.[0] || null, modules: [], isOnboarded: false };
+    }
+  }
+
+  // 2. Direct authoritative lookup by authenticated auth_user_id (prevents cross-tenant leakages)
   if (params.authUserId) {
     const { data: userProfiles } = await supabaseAdmin
       .from('company_profiles')
@@ -192,30 +218,6 @@ export async function fetchCompanyProfileWithModules(params: {
         modules: await loadModules(onboarded.tenant_id),
         isOnboarded: true,
       };
-    }
-  }
-
-  if (params.tenantId && params.tenantId !== 't_default') {
-    const { data: tenantProfiles } = await supabaseAdmin
-      .from('company_profiles')
-      .select('*')
-      .eq('tenant_id', params.tenantId)
-      .order('updated_at', { ascending: false })
-      .limit(5);
-
-    const onboarded = tenantProfiles?.find((p) =>
-      isCompanyProfileOnboarded(p) &&
-      (!params.authUserId || !p.auth_user_id || p.auth_user_id === params.authUserId)
-    );
-    if (onboarded) {
-      return {
-        profile: onboarded,
-        modules: await loadModules(onboarded.tenant_id),
-        isOnboarded: true,
-      };
-    }
-    if (!params.email) {
-      return { profile: tenantProfiles?.[0] || null, modules: [], isOnboarded: false };
     }
   }
 
