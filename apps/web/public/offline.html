@@ -11,10 +11,11 @@
       body {
         margin: 0;
         min-height: 100vh;
+        min-height: 100dvh;
         display: flex;
         align-items: center;
         justify-content: center;
-        padding: 24px;
+        padding: 20px;
         font-family: 'Urbanist', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         color: #17191a;
         background: linear-gradient(180deg, #f8f7ff 0%, #ffffff 100%);
@@ -25,17 +26,94 @@
         background: #ffffff;
         border: 1px solid rgba(98, 83, 248, 0.14);
         border-radius: 24px;
-        padding: 36px 28px;
+        padding: 32px 24px;
         text-align: center;
         box-shadow: 0 24px 50px -18px rgba(98, 83, 248, 0.16);
       }
-      .logo {
-        width: 56px;
-        height: 56px;
-        margin: 0 auto 18px;
+      .mascot-wrap {
+        position: relative;
+        display: inline-flex;
+        flex-direction: column;
+        align-items: center;
+        margin: 0 auto 14px;
+        cursor: pointer;
+        user-select: none;
+      }
+      .mascot-shadow {
+        position: absolute;
+        bottom: 4px;
+        left: 55%;
+        width: 56%;
+        height: 20px;
+        border-radius: 50%;
+        background: radial-gradient(ellipse at center, rgba(22, 48, 84, 0.34) 0%, rgba(22, 48, 84, 0.12) 48%, rgba(22, 48, 84, 0) 75%);
+        filter: blur(4px);
+        z-index: 0;
+        pointer-events: none;
+        animation: offlineShadowIdle 4.8s ease-in-out infinite;
+      }
+      .mascot-idle {
+        position: relative;
+        z-index: 1;
+        display: inline-block;
+        filter: drop-shadow(0 12px 24px rgba(24, 54, 92, 0.16));
+        animation: offlineMonsterIdle 4.8s ease-in-out infinite;
+        transform-origin: 50% 84%;
+      }
+      .mascot-body {
+        height: clamp(145px, 34vw, 196px);
+        width: auto;
         display: block;
-        border-radius: 14px;
-        object-fit: contain;
+        pointer-events: none;
+      }
+      .mascot-layer {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+      }
+      .mascot-arm {
+        width: 100%;
+        height: 100%;
+        display: block;
+        pointer-events: none;
+        animation: offlineArmUpDown 3.8s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
+        transform-origin: 81.1% 38.2%;
+      }
+      .mascot-bounce {
+        animation: offlinePopBounce 0.52s cubic-bezier(0.34, 1.56, 0.64, 1);
+      }
+      @keyframes offlineMonsterIdle {
+        0% { transform: translate3d(0, 0px, 0) rotate(-1.1deg); }
+        50% { transform: translate3d(0, -8px, 0) rotate(1.1deg); }
+        100% { transform: translate3d(0, 0px, 0) rotate(-1.1deg); }
+      }
+      @keyframes offlineArmUpDown {
+        0% { transform: rotate(-5deg) translate3d(0px, -0.5%, 0); }
+        14% { transform: rotate(3deg) translate3d(2px, 0.4%, 0); }
+        28% { transform: rotate(-4deg) translate3d(-1px, -0.4%, 0); }
+        48% { transform: rotate(13deg) translate3d(3px, 1.3%, 0); }
+        64% { transform: rotate(4deg) translate3d(1px, 0.5%, 0); }
+        80% { transform: rotate(16deg) translate3d(4px, 1.6%, 0); }
+        100% { transform: rotate(-5deg) translate3d(0px, -0.5%, 0); }
+      }
+      @keyframes offlineShadowIdle {
+        0% { transform: translateX(-50%) scale(1); opacity: 0.92; }
+        50% { transform: translateX(-50%) scale(0.9); opacity: 0.72; }
+        100% { transform: translateX(-50%) scale(1); opacity: 0.92; }
+      }
+      @keyframes offlinePopBounce {
+        0% { transform: scale(1) rotate(0deg); }
+        30% { transform: scale(1.08, 0.94) translateY(-10px) rotate(-2.5deg); }
+        60% { transform: scale(0.97, 1.05) translateY(-16px) rotate(2.5deg); }
+        82% { transform: scale(1.02, 0.98) translateY(-4px) rotate(-1deg); }
+        100% { transform: scale(1) rotate(0deg); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .mascot-idle, .mascot-arm, .mascot-shadow, .mascot-bounce {
+          animation: none !important;
+        }
       }
       h1 {
         margin: 0 0 8px;
@@ -67,13 +145,237 @@
   </head>
   <body>
     <div class="card">
-      <img src="/icons/icon-192x192.png" alt="UNAI CRM" class="logo" />
+      <!-- Animated Expressive Mascot (no 404 behind it) -->
+      <div class="mascot-wrap" id="offline-mascot" title="Tap to change expression">
+        <div class="mascot-shadow" aria-hidden="true"></div>
+        <div id="mascot-bounce-box">
+          <div class="mascot-idle">
+            <img
+              src="/images/lost-monster-body.png"
+              alt="Animated fluffy blue UNAI CRM mascot"
+              draggable="false"
+              class="mascot-body"
+            />
+            <svg viewBox="0 0 676 760" aria-hidden="true" class="mascot-layer" style="z-index: 2;">
+              <defs>
+                <radialGradient id="offEyeL" cx="38%" cy="32%" r="68%">
+                  <stop offset="0%" stop-color="#FFFFFF" />
+                  <stop offset="68%" stop-color="#F1F5FA" />
+                  <stop offset="100%" stop-color="#C4D3E5" />
+                </radialGradient>
+                <radialGradient id="offEyeR" cx="38%" cy="32%" r="68%">
+                  <stop offset="0%" stop-color="#FFFFFF" />
+                  <stop offset="68%" stop-color="#F1F5FA" />
+                  <stop offset="100%" stop-color="#C4D3E5" />
+                </radialGradient>
+                <linearGradient id="offLid" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stop-color="#65A8EB" />
+                  <stop offset="72%" stop-color="#4380C7" />
+                  <stop offset="100%" stop-color="#2A5894" />
+                </linearGradient>
+                <radialGradient id="offSquint" cx="50%" cy="20%" r="80%">
+                  <stop offset="0%" stop-color="#5AA1E8" />
+                  <stop offset="65%" stop-color="#3B78BF" />
+                  <stop offset="100%" stop-color="#26508A" />
+                </radialGradient>
+                <linearGradient id="offLip" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stop-color="#C1899B" />
+                  <stop offset="55%" stop-color="#9A6078" />
+                  <stop offset="100%" stop-color="#6D3F54" />
+                </linearGradient>
+                <clipPath id="offClipL">
+                  <ellipse cx="341.8" cy="136.8" rx="28" ry="26.4" />
+                </clipPath>
+                <clipPath id="offClipR">
+                  <ellipse cx="422.2" cy="152.2" rx="29.4" ry="27.2" />
+                </clipPath>
+              </defs>
+              <g clip-path="url(#offClipL)">
+                <ellipse cx="341.8" cy="136.8" rx="28.4" ry="26.8" fill="url(#offEyeL)" />
+                <ellipse cx="341.8" cy="136.8" rx="28" ry="26.4" fill="none" stroke="rgba(22,48,88,0.28)" stroke-width="3" />
+                <g id="off-pupil-l" style="transform-origin: 344px 137px; transition: transform 0.24s cubic-bezier(0.22,1,0.36,1);">
+                  <circle cx="344" cy="137" r="10.4" fill="#17202C" />
+                  <circle cx="344" cy="137" r="6.4" fill="#070B11" />
+                  <circle cx="340.5" cy="132.5" r="3.4" fill="#FFFFFF" />
+                  <circle cx="347.5" cy="140.5" r="1.4" fill="rgba(255,255,255,0.72)" />
+                </g>
+                <g id="off-lid-l" style="transform: translateY(-60px); transition: transform 0.16s ease-out;">
+                  <rect x="308" y="108" width="68" height="58" rx="14" fill="url(#offLid)" />
+                  <line x1="312" y1="164" x2="372" y2="164" stroke="#1E4478" stroke-width="2.5" />
+                </g>
+                <ellipse id="off-squint-l" cx="341.8" cy="171" rx="31" ry="11" fill="url(#offSquint)" stroke="#224A7E" stroke-width="1.4" style="transform: translateY(10px); transition: transform 0.3s cubic-bezier(0.22,1,0.36,1);" />
+              </g>
+              <g clip-path="url(#offClipR)">
+                <ellipse cx="422.2" cy="152.2" rx="29.8" ry="27.6" fill="url(#offEyeR)" />
+                <ellipse cx="422.2" cy="152.2" rx="29.4" ry="27.2" fill="none" stroke="rgba(22,48,88,0.28)" stroke-width="3" />
+                <g id="off-pupil-r" style="transform-origin: 417px 152px; transition: transform 0.24s cubic-bezier(0.22,1,0.36,1);">
+                  <circle cx="417" cy="152" r="10.7" fill="#17202C" />
+                  <circle cx="417" cy="152" r="6.6" fill="#070B11" />
+                  <circle cx="413.5" cy="147.5" r="3.5" fill="#FFFFFF" />
+                  <circle cx="420.5" cy="155.5" r="1.4" fill="rgba(255,255,255,0.72)" />
+                </g>
+                <g id="off-lid-r" style="transform: translateY(-62px); transition: transform 0.16s ease-out;">
+                  <rect x="388" y="122" width="70" height="60" rx="14" fill="url(#offLid)" />
+                  <line x1="392" y1="180" x2="454" y2="180" stroke="#1E4478" stroke-width="2.5" />
+                </g>
+                <ellipse id="off-squint-r" cx="422.2" cy="187" rx="32" ry="11" fill="url(#offSquint)" stroke="#224A7E" stroke-width="1.4" style="transform: translateY(10px); transition: transform 0.3s cubic-bezier(0.22,1,0.36,1);" />
+              </g>
+              <g id="off-mouth-worried">
+                <path d="M 326 237 C 337 213, 393 209, 408 232 C 402 238, 391 236, 376 234 C 357 232, 340 237, 326 237 Z" fill="#1B0E14" />
+                <path d="M 357 218 L 365 217 L 364 224 C 361 225, 358 225, 356 224 Z" fill="#F6F7FA" />
+                <path d="M 368 217 L 377 217 L 377 224 C 374 225, 371 225, 368 224 Z" fill="#F6F7FA" />
+                <path d="M 347 235 C 358 228, 381 228, 390 234 Z" fill="#944B61" />
+                <path d="M 326 238 C 344 231, 389 229, 409 233 C 403 241, 390 239, 372 238 C 353 237, 336 243, 326 238 Z" fill="url(#offLip)" />
+              </g>
+              <g id="off-mouth-confused" style="display: none;">
+                <ellipse cx="374" cy="228" rx="13.5" ry="10.5" transform="rotate(-8 374 228)" fill="#1B0E14" />
+                <path d="M 362 232 C 369 240, 382 239, 387 229 C 383 234, 369 235, 362 232 Z" fill="url(#offLip)" />
+                <ellipse cx="374" cy="233" rx="6.2" ry="3" fill="#944B61" />
+              </g>
+              <g id="off-mouth-thinking" style="display: none;">
+                <path d="M 343 227 Q 357 234 369 226 Q 382 220 393 226" fill="none" stroke="#18273E" stroke-width="5" stroke-linecap="round" />
+                <path d="M 353 233 Q 368 238 384 231" fill="none" stroke="rgba(169,114,136,0.72)" stroke-width="3.2" stroke-linecap="round" />
+              </g>
+              <g id="off-mouth-surprised" style="display: none;">
+                <ellipse cx="369" cy="228" rx="16.5" ry="18.5" fill="#170A10" />
+                <path d="M 358 214 C 365 213, 373 213, 380 214 L 378 219 C 371 220, 366 220, 360 219 Z" fill="#F5F7FA" />
+                <ellipse cx="369" cy="239" rx="9.5" ry="4.5" fill="#9A4E65" />
+                <path d="M 353 232 C 357 248, 381 248, 385 232 C 380 242, 358 242, 353 232 Z" fill="url(#offLip)" />
+              </g>
+              <g id="off-mouth-happy" style="display: none;">
+                <path d="M 332 218 C 345 245, 391 244, 404 217 C 386 222, 350 223, 332 218 Z" fill="#1B0E14" />
+                <path d="M 345 220 C 359 223, 377 223, 391 220 L 389 227 C 376 229, 360 229, 347 227 Z" fill="#F6F8FB" />
+                <path d="M 352 233 C 362 228, 375 228, 384 233 C 377 238, 359 238, 352 233 Z" fill="#A8576E" />
+                <path d="M 332 219 C 345 246, 391 245, 404 218 C 394 240, 381 244, 368 244 C 355 244, 342 240, 332 219 Z" fill="url(#offLip)" />
+              </g>
+            </svg>
+            <img
+              id="off-brow-l"
+              src="/images/lost-monster-brow-l.png"
+              alt=""
+              aria-hidden="true"
+              draggable={false}
+              class="mascot-layer"
+              style="z-index: 3; transform-origin: 51.2% 12.4%; transition: transform 0.38s cubic-bezier(0.34,1.56,0.64,1);"
+            />
+            <img
+              id="off-brow-r"
+              src="/images/lost-monster-brow-r.png"
+              alt=""
+              aria-hidden="true"
+              draggable={false}
+              class="mascot-layer"
+              style="z-index: 3; transform-origin: 62.4% 14.2%; transition: transform 0.38s cubic-bezier(0.34,1.56,0.64,1);"
+            />
+            <div
+              id="off-arm-pose"
+              aria-hidden="true"
+              class="mascot-layer"
+              style="z-index: 4; transform-origin: 81.1% 38.2%; transition: transform 0.52s cubic-bezier(0.34,1.56,0.64,1);"
+            >
+              <img src="/images/lost-monster-arm.png" alt="" draggable={false} class="mascot-arm" />
+            </div>
+          </div>
+        </div>
+      </div>
+
       <h1>You&rsquo;re offline</h1>
       <p>
         UNAI CRM cannot reach the server right now. Check your internet connection and tap retry to continue your dealership work.
       </p>
-      <button type="button" onclick="window.location.reload()">Retry Connection</button>
+      <button type="button" id="retry-conn-btn" onclick="window.location.reload()">Retry Connection</button>
     </div>
+
+    <script>
+      (function () {
+        var POSES = {
+          worried: { armDeg: -3, armY: -0.4, bLY: 0, bLDeg: 0, bRY: 0, bRDeg: 0, lookX: -4, lookY: -3, scale: 1, squint: 0 },
+          confused: { armDeg: 6, armY: 0.8, bLY: -1.4, bLDeg: -10, bRY: 0.5, bRDeg: 7, lookX: 6, lookY: -5, scale: 0.94, squint: 0 },
+          thinking: { armDeg: 10, armY: 1.4, bLY: 0.7, bLDeg: 11, bRY: -1.1, bRDeg: -9, lookX: -7, lookY: -6, scale: 0.9, squint: 0.25 },
+          surprised: { armDeg: -6, armY: -0.7, bLY: -1.8, bLDeg: 12, bRY: -1.8, bRDeg: -12, lookX: 0, lookY: -2, scale: 1.14, squint: 0 },
+          happy: { armDeg: 4, armY: 0.5, bLY: -1.3, bLDeg: 10, bRY: -1.3, bRDeg: -10, lookX: 0, lookY: 5, scale: 1.08, squint: 0.65 }
+        };
+        var SEQ = ['worried', 'confused', 'thinking', 'surprised', 'happy'];
+        var idx = 0;
+        var blinking = false;
+        var hovered = false;
+        var gx = 0;
+        var gy = 0;
+
+        var pL = document.getElementById('off-pupil-l');
+        var pR = document.getElementById('off-pupil-r');
+        var lL = document.getElementById('off-lid-l');
+        var lR = document.getElementById('off-lid-r');
+        var sL = document.getElementById('off-squint-l');
+        var sR = document.getElementById('off-squint-r');
+        var bL = document.getElementById('off-brow-l');
+        var bR = document.getElementById('off-brow-r');
+        var arm = document.getElementById('off-arm-pose');
+        var bounceBox = document.getElementById('mascot-bounce-box');
+        var retryBtn = document.getElementById('retry-conn-btn');
+        var mascotWrap = document.getElementById('offline-mascot');
+
+        function clamp(v, min, max) { return Math.min(max, Math.max(min, v)); }
+
+        function applyState() {
+          var expr = hovered ? 'happy' : SEQ[idx];
+          var pose = POSES[expr];
+          var dx = clamp(hovered ? 0 : pose.lookX * 0.55 + gx, -8.5, 8.5);
+          var dy = clamp(hovered ? 6.5 : pose.lookY * 0.55 + gy, -7.5, 7.5);
+          if (pL) pL.style.transform = 'translate(' + dx + 'px,' + dy + 'px) scale(' + pose.scale + ')';
+          if (pR) pR.style.transform = 'translate(' + dx + 'px,' + dy + 'px) scale(' + pose.scale + ')';
+          if (lL) lL.style.transform = blinking ? 'translateY(0px)' : (expr === 'thinking' ? 'translateY(-38px)' : 'translateY(-60px)');
+          if (lR) lR.style.transform = blinking ? 'translateY(0px)' : (expr === 'thinking' ? 'translateY(-40px)' : 'translateY(-62px)');
+          var sy = pose.squint > 0 ? -pose.squint * 3.5 : 10;
+          if (sL) sL.style.transform = 'translateY(' + sy + 'px)';
+          if (sR) sR.style.transform = 'translateY(' + sy + 'px)';
+          if (bL) bL.style.transform = 'translateY(' + pose.bLY + '%) rotate(' + pose.bLDeg + 'deg)';
+          if (bR) bR.style.transform = 'translateY(' + pose.bRY + '%) rotate(' + pose.bRDeg + 'deg)';
+          if (arm) arm.style.transform = 'rotate(' + pose.armDeg + 'deg) translateY(' + pose.armY + '%)';
+          for (var i = 0; i < SEQ.length; i++) {
+            var m = document.getElementById('off-mouth-' + SEQ[i]);
+            if (m) m.style.display = SEQ[i] === expr ? 'inline' : 'none';
+          }
+        }
+
+        applyState();
+        setInterval(function () {
+          if (!hovered) {
+            idx = (idx + 1) % SEQ.length;
+            applyState();
+          }
+        }, 2400);
+
+        setInterval(function () {
+          blinking = true;
+          applyState();
+          setTimeout(function () { blinking = false; applyState(); }, 150);
+        }, 3400);
+
+        window.addEventListener('pointermove', function (e) {
+          gx = clamp((e.clientX / (window.innerWidth || 1) - 0.5) * 2, -1, 1) * 5.5;
+          gy = clamp((e.clientY / (window.innerHeight || 1) - 0.5) * 2, -1, 1) * 4.5;
+          applyState();
+        }, { passive: true });
+
+        if (mascotWrap) {
+          mascotWrap.addEventListener('click', function () {
+            idx = (idx + 1) % SEQ.length;
+            applyState();
+            if (bounceBox) {
+              bounceBox.classList.remove('mascot-bounce');
+              void bounceBox.offsetWidth;
+              bounceBox.classList.add('mascot-bounce');
+            }
+          });
+        }
+        if (retryBtn) {
+          retryBtn.addEventListener('mouseenter', function () { hovered = true; applyState(); });
+          retryBtn.addEventListener('mouseleave', function () { hovered = false; applyState(); });
+          retryBtn.addEventListener('focus', function () { hovered = true; applyState(); });
+          retryBtn.addEventListener('blur', function () { hovered = false; applyState(); });
+        }
+      })();
+    </script>
   </body>
 </html>
-

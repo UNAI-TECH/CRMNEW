@@ -113,14 +113,7 @@ export default function SalesOverviewPage() {
       </div>
 
       {/* KPI Stats Grid */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
-          gap: '1.25rem',
-          marginBottom: '2rem',
-        }}
-      >
+      <div className="grid-4" style={{ marginBottom: '2rem' }}>
         <StatCard
           title="Total Deal Pipeline"
           value={`₹${(totalDealsValue / 100000).toFixed(2)} Lakh`}

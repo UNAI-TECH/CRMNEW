@@ -1,8 +1,9 @@
 'use client';
 
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { AlertCircle, RotateCcw, Home } from 'lucide-react';
+import { RotateCcw, Home } from 'lucide-react';
+import { LostMonsterMascot } from '@/components/ui/LostMonsterMascot';
 
 export default function GlobalErrorPage({
   error,
@@ -11,6 +12,8 @@ export default function GlobalErrorPage({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  const [ctaHovered, setCtaHovered] = useState(false);
+
   useEffect(() => {
     console.error('App Router Error Caught:', error);
   }, [error]);
@@ -24,26 +27,19 @@ export default function GlobalErrorPage({
         flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
-        padding: '2rem',
+        padding: '2rem 1.25rem',
         textAlign: 'center',
         backgroundColor: '#FFFFFF',
+        boxSizing: 'border-box',
       }}
     >
-      <div
-        style={{
-          width: '56px',
-          height: '56px',
-          borderRadius: '16px',
-          backgroundColor: '#FFF1F2',
-          border: '1px solid #FECDD3',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          marginBottom: '1.25rem',
-          color: '#E11D48',
-        }}
-      >
-        <AlertCircle size={28} />
+      {/* Animated Expressive Mascot (without 404 behind it) */}
+      <div style={{ marginBottom: '1.15rem' }}>
+        <LostMonsterMascot
+          height="clamp(150px, 32vw, 210px)"
+          ctaHovered={ctaHovered}
+          trackWindowPointer
+        />
       </div>
 
       <h2
@@ -51,7 +47,7 @@ export default function GlobalErrorPage({
           fontSize: '1.5rem',
           fontWeight: 800,
           color: '#17191A',
-          marginBottom: '0.5rem',
+          margin: '0 0 0.5rem 0',
           letterSpacing: '-0.02em',
         }}
       >
@@ -64,16 +60,28 @@ export default function GlobalErrorPage({
           color: '#5E6360',
           maxWidth: '440px',
           lineHeight: 1.5,
-          marginBottom: '1.75rem',
+          margin: '0 0 1.75rem 0',
         }}
       >
         An unexpected error occurred while loading this view. You can retry or return to the main dashboard.
       </p>
 
-      <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+      <div
+        style={{
+          display: 'flex',
+          gap: '12px',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexWrap: 'wrap',
+        }}
+      >
         <button
           type="button"
           onClick={() => reset()}
+          onMouseEnter={() => setCtaHovered(true)}
+          onMouseLeave={() => setCtaHovered(false)}
+          onFocus={() => setCtaHovered(true)}
+          onBlur={() => setCtaHovered(false)}
           style={{
             display: 'inline-flex',
             alignItems: 'center',
@@ -94,6 +102,10 @@ export default function GlobalErrorPage({
 
         <Link
           href="/dashboard"
+          onMouseEnter={() => setCtaHovered(true)}
+          onMouseLeave={() => setCtaHovered(false)}
+          onFocus={() => setCtaHovered(true)}
+          onBlur={() => setCtaHovered(false)}
           style={{
             display: 'inline-flex',
             alignItems: 'center',
@@ -115,4 +127,3 @@ export default function GlobalErrorPage({
     </div>
   );
 }
-

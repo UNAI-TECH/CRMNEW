@@ -1,9 +1,13 @@
-const CACHE_VERSION = 'unai-crm-pwa-v2';
+const CACHE_VERSION = 'unai-crm-pwa-v3';
 const CORE_PRECACHE_URLS = [
   '/offline.html',
   '/unai-logo.png',
   '/icons/icon-192x192.png',
   '/icons/icon-512x512.png',
+  '/images/lost-monster-body.png',
+  '/images/lost-monster-arm.png',
+  '/images/lost-monster-brow-l.png',
+  '/images/lost-monster-brow-r.png',
 ];
 
 self.addEventListener('install', (event) => {
